@@ -1,0 +1,49 @@
+motor_driver:
+  ros__parameters:
+    i2c_bus: 1
+    # Raspberry Pi 5 vendor library uses address 0x2B
+    i2c_addr: 43  # 0x2B
+    i2c_protocol: "auto"  # auto|pi5|legacy
+    i2c_required: true
+    dry_run: false
+    max_pwm: 100
+    max_linear_velocity: 0.35   # m/s (tune for your robot)
+    wheel_separation: 0.18      # m (tune)
+    cmd_vel_timeout_sec: 0.5
+    idle_stop_period_sec: 1.0
+
+ultrasonic:
+  ros__parameters:
+    gpio_backend: "auto"  # auto|rpi|lgpio
+    gpio_mode: "BOARD"   # BOARD or BCM
+    lgpio_chip: -1  # auto-select (Pi 5 often needs gpiochip4)
+    trig_pin: 16
+    echo_pin: 18
+    frame_id: "ultrasonic_link"
+    min_range_m: 0.02
+    max_range_m: 4.0
+    publish_hz: 10.0
+
+gpio_sensors:
+  ros__parameters:
+    gpio_backend: "auto"  # auto|rpi|lgpio
+    gpio_mode: "BOARD"
+    lgpio_chip: -1  # auto-select (Pi 5 often needs gpiochip4)
+    avoid_on_pin: 22
+    avoid_left_pin: 21
+    avoid_right_pin: 19
+    tracking_left1_pin: 13
+    tracking_left2_pin: 15
+    tracking_right1_pin: 11
+    tracking_right2_pin: 7
+    publish_hz: 20.0
+
+opencv_camera:
+  ros__parameters:
+    device_index: 0
+    frame_id: "camera_link"
+    width: 640
+    height: 480
+    fps: 30.0
+    jpeg_quality: 80
+    topic: "image_raw/compressed"
