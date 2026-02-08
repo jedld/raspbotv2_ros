@@ -10,6 +10,11 @@ motor_driver:
     # Helps all wheels start together at low commands (overcomes static friction).
     # If the robot creeps when you barely touch keys, reduce or set to 0.
     min_pwm: 15
+    # Optional: brief boost when starting from rest to overcome wheel static friction.
+    # Helps wheels start together on turns/strafe when some motors are "stickier" than others.
+    # 0 disables.
+    startup_kick_pwm: 0
+    startup_kick_duration_sec: 0.15
     max_linear_velocity: 0.35   # m/s (tune for your robot)
     # Mecanum drive uses linear.x (forward), linear.y (left), angular.z (yaw)
     drive_mode: "mecanum"  # mecanum|differential
@@ -111,3 +116,32 @@ camera_gimbal:
     reset_on_shutdown: true
     command_timeout_sec: 0.0
     publish_hz: 20.0
+
+oled:
+  ros__parameters:
+    enabled: true
+    # Typical small OLEDs are SSD1306-compatible at I2C address 0x3C.
+    i2c_bus: 1
+    i2c_addr: 60  # 0x3C
+    i2c_required: false
+    dry_run: false
+    width: 128
+    height: 32
+    rotate_180: false
+    contrast: 127
+    update_hz: 2.0
+
+    # Text rendering. 8 is a good default for 128x32.
+    font_size: 8
+    # Leave empty to auto-pick a common system font.
+    font_path: ""
+
+    # If the OLED is blank/garbled, set this true once to cycle common configs
+    # (128x64/128x32 and rotation) and pick what looks correct.
+    startup_probe: false
+    startup_probe_hold_sec: 2.0
+
+    text_topic: "oled/text"
+    ultrasonic_topic: "ultrasonic/range"
+    cmd_vel_topic: "cmd_vel"
+    show_ip: true

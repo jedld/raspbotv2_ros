@@ -1,6 +1,6 @@
 from setuptools import setup
 
-package_name = 'raspbot_bringup'
+package_name = 'raspbot_web_video'
 
 setup(
     name=package_name,
@@ -9,19 +9,18 @@ setup(
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        ('share/' + package_name + '/launch', ['launch/bringup.launch.py']),
-        ('share/' + package_name, ['README.md']),
+        ('share/' + package_name + '/launch', ['launch/web_video.launch.py']),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='user',
     maintainer_email='user@todo.todo',
-    description='Bringup launch files for Yahboom Raspbot V2.',
+    description='Minimal MJPEG web streamer for ROS 2 camera compressed images.',
     license='Apache-2.0',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'startup_sound = raspbot_bringup.startup_sound:main',
-        ]
+            'web_video = raspbot_web_video.web_video_server:main',
+        ],
     },
 )

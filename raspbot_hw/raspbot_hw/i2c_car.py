@@ -203,6 +203,16 @@ class I2CCar:
             return float('nan')
         return float(mm) / 1000.0
 
+    def set_beep_enabled(self, enabled: bool) -> None:
+        """Enable/disable the controller buzzer (Pi5 protocol).
+
+        Vendor library uses reg 0x06 with payload [state] where state is 0/1.
+        """
+        if self._protocol != 'pi5':
+            return
+        state = 1 if bool(enabled) else 0
+        self._write_block(0x06, [state])
+
     def close(self) -> None:
         if self._dry_run or self._bus is None:
             return

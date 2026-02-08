@@ -1,8 +1,8 @@
 <?xml version="1.0"?>
 <package format="3">
-  <name>raspbot_hw</name>
+  <name>raspbot_web_video</name>
   <version>0.1.0</version>
-  <description>Hardware drivers for Yahboom Raspbot V2 (motors over I2C, ultrasonic + IR sensors over GPIO, optional camera).</description>
+  <description>Minimal web (MJPEG) video streamer for Yahboom Raspbot V2 camera topics.</description>
   <maintainer email="user@todo.todo">user</maintainer>
   <license>Apache-2.0</license>
 
@@ -11,10 +11,6 @@
   <depend>rclpy</depend>
   <depend>geometry_msgs</depend>
   <depend>sensor_msgs</depend>
-  <depend>std_msgs</depend>
-
-  <exec_depend>python3-smbus</exec_depend>
-  <exec_depend>python3-pil</exec_depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

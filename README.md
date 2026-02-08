@@ -6,6 +6,7 @@ Packages:
 
 - `raspbot_hw`: I2C motor driver + GPIO sensors + optional camera publisher
 - `raspbot_bringup`: unified bringup launch
+- `raspbot_web_video`: tiny web MJPEG viewer for the camera topic
 
 Start here:
 
@@ -16,6 +17,10 @@ Quick component testing:
 
 - Camera only: `ros2 launch raspbot_bringup bringup.launch.py enable_motors:=false enable_ultrasonic:=false enable_gpio_sensors:=false enable_camera:=true`
 - Sensors only (no motors): `ros2 launch raspbot_bringup bringup.launch.py enable_motors:=false`
+
+Hardware overview / board notes:
+
+- See `HARDWARE.md` for a consolidated feature list, pin map, and I2C register notes.
 
 If your Yahboom scripts work, but these nodes can’t access hardware, it’s almost always permissions (I2C/GPIO/video) or different pin numbering (BOARD vs BCM). The default pins match Yahboom’s course notebooks:
 

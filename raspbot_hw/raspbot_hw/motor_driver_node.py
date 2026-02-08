@@ -42,6 +42,10 @@ class MotorDriverNode(Node):
         self.declare_parameter('invert_rr', False)
         self.declare_parameter('cmd_vel_timeout_sec', 0.5)
         self.declare_parameter('idle_stop_period_sec', 1.0)
+        # Optional: brief boost when starting from rest to overcome static friction.
+        # 0 disables.
+        self.declare_parameter('startup_kick_pwm', 0)
+        self.declare_parameter('startup_kick_duration_sec', 0.15)
 
         i2c_bus = int(self.get_parameter('i2c_bus').value)
         i2c_addr = int(self.get_parameter('i2c_addr').value)
@@ -73,6 +77,10 @@ class MotorDriverNode(Node):
         self._timeout = float(self.get_parameter('cmd_vel_timeout_sec').value)
         self._idle_stop_period = float(self.get_parameter('idle_stop_period_sec').value)
 
+        self._startup_kick_pwm = int(self.get_parameter('startup_kick_pwm').value)
+        self._startup_kick_duration = float(self.get_parameter('startup_kick_duration_sec').value)
+        self._kick_until_time = 0.0
+
         self._car = I2CCar(i2c_bus=i2c_bus, i2c_addr=i2c_addr, dry_run=dry_run, protocol=i2c_protocol)
 
         self._last_cmd_time = None
@@ -85,6 +93,8 @@ class MotorDriverNode(Node):
         self._fr_pwm = 0.0
         self._rl_pwm = 0.0
         self._rr_pwm = 0.0
+
+        self._prev_nonzero = False
 
         self.create_subscription(Twist, 'cmd_vel', self._on_cmd_vel, 10)
         self._timer = self.create_timer(0.02, self._tick)  # 50Hz
@@ -198,6 +208,32 @@ class MotorDriverNode(Node):
 
         self._last_cmd_time = time.time()
 
+        # If we were stopped and are now commanded to move, start a brief kick window.
+        now = self._last_cmd_time
+        if self._startup_kick_pwm > 0 and self._startup_kick_duration > 0.0:
+            if not self._prev_nonzero and self._is_any_motion_commanded():
+                self._kick_until_time = now + self._startup_kick_duration
+            self._prev_nonzero = self._is_any_motion_commanded()
+
+    def _is_any_motion_commanded(self) -> bool:
+        if self._drive_mode == 'mecanum' and self._car.protocol == 'pi5':
+            return any(
+                abs(x) > 1e-6
+                for x in (self._fl_pwm, self._fr_pwm, self._rl_pwm, self._rr_pwm)
+            )
+        return abs(self._left_pwm) > 1e-6 or abs(self._right_pwm) > 1e-6
+
+    def _apply_startup_kick(self, pwm: float) -> float:
+        if self._startup_kick_pwm <= 0:
+            return pwm
+        if pwm == 0.0:
+            return 0.0
+        sign = 1.0 if pwm > 0.0 else -1.0
+        mag = abs(pwm)
+        if mag < float(self._startup_kick_pwm):
+            return sign * float(self._startup_kick_pwm)
+        return pwm
+
     def _apply_min_pwm(self, pwm: float) -> float:
         if pwm == 0.0:
             return 0.0
@@ -231,13 +267,20 @@ class MotorDriverNode(Node):
         if (now - self._last_write_time) < self._min_write_period:
             return
 
+        # During the kick window, force a slightly higher PWM to help all wheels start together.
+        kick_active = self._startup_kick_pwm > 0 and self._startup_kick_duration > 0.0 and now <= self._kick_until_time
+
         try:
             if self._drive_mode == 'mecanum' and self._car.protocol == 'pi5':
+                fl = self._apply_startup_kick(self._fl_pwm) if kick_active else self._fl_pwm
+                fr = self._apply_startup_kick(self._fr_pwm) if kick_active else self._fr_pwm
+                rl = self._apply_startup_kick(self._rl_pwm) if kick_active else self._rl_pwm
+                rr = self._apply_startup_kick(self._rr_pwm) if kick_active else self._rr_pwm
                 self._car.set_motor_pwms(
-                    self._fl_pwm,
-                    self._fr_pwm,
-                    self._rl_pwm,
-                    self._rr_pwm,
+                    fl,
+                    fr,
+                    rl,
+                    rr,
                     max_pwm=self._max_pwm,
                     motor_id_fl=self._motor_id_fl,
                     motor_id_fr=self._motor_id_fr,
@@ -245,7 +288,9 @@ class MotorDriverNode(Node):
                     motor_id_rr=self._motor_id_rr,
                 )
             else:
-                self._car.set_wheel_pwms(self._left_pwm, self._right_pwm, max_pwm=self._max_pwm)
+                left = self._apply_startup_kick(self._left_pwm) if kick_active else self._left_pwm
+                right = self._apply_startup_kick(self._right_pwm) if kick_active else self._right_pwm
+                self._car.set_wheel_pwms(left, right, max_pwm=self._max_pwm)
             self._last_write_time = now
         except Exception as e:
             self.get_logger().error(f'I2C write failed: {e!r}')
