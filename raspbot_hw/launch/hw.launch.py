@@ -12,6 +12,7 @@ def generate_launch_description():
     enable_ultrasonic = LaunchConfiguration('enable_ultrasonic')
     enable_gpio_sensors = LaunchConfiguration('enable_gpio_sensors')
     enable_camera = LaunchConfiguration('enable_camera')
+    enable_gimbal = LaunchConfiguration('enable_gimbal')
     params_file = LaunchConfiguration('params_file')
 
     default_params_file = PathJoinSubstitution([
@@ -25,6 +26,7 @@ def generate_launch_description():
         DeclareLaunchArgument('enable_ultrasonic', default_value='true'),
         DeclareLaunchArgument('enable_gpio_sensors', default_value='true'),
         DeclareLaunchArgument('enable_camera', default_value='false'),
+        DeclareLaunchArgument('enable_gimbal', default_value='true'),
         DeclareLaunchArgument('params_file', default_value=default_params_file),
 
         Node(
@@ -58,5 +60,13 @@ def generate_launch_description():
             output='screen',
             parameters=[params_file],
             condition=IfCondition(enable_camera),
+        ),
+        Node(
+            package='raspbot_hw',
+            executable='camera_gimbal',
+            name='camera_gimbal',
+            output='screen',
+            parameters=[params_file],
+            condition=IfCondition(enable_gimbal),
         ),
     ])

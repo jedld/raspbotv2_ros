@@ -7,13 +7,47 @@ motor_driver:
     i2c_required: true
     dry_run: false
     max_pwm: 100
+    # Helps all wheels start together at low commands (overcomes static friction).
+    # If the robot creeps when you barely touch keys, reduce or set to 0.
+    min_pwm: 15
     max_linear_velocity: 0.35   # m/s (tune for your robot)
-    wheel_separation: 0.18      # m (tune)
+    # Mecanum drive uses linear.x (forward), linear.y (left), angular.z (yaw)
+    drive_mode: "mecanum"  # mecanum|differential
+
+    # Geometry (meters). If you don't know these yet, start with ~0.18 and tune.
+    wheel_separation: 0.18      # used by differential mode
+    wheelbase: 0.18             # front-to-rear wheel distance
+    track_width: 0.18           # left-to-right wheel distance
+
+    # Motor mapping for pi5 protocol (0..3). Defaults assume:
+    # 0=front_left, 1=rear_left, 2=front_right, 3=rear_right
+    motor_id_fl: 0
+    motor_id_rl: 1
+    motor_id_fr: 2
+    motor_id_rr: 3
+    invert_fl: false
+    # If a wheel spins backwards on forward commands, flip its invert_*. Often if one
+    # right wheel is reversed you should flip BOTH right wheels (FR+RR) so they don't fight.
+    invert_fr: false
+    invert_rl: false
+    invert_rr: false
+    # I2C write rate. Too high can cause uneven updates; 20Hz is usually plenty.
+    write_hz: 20.0
     cmd_vel_timeout_sec: 0.5
     idle_stop_period_sec: 1.0
 
 ultrasonic:
   ros__parameters:
+    # auto will use I2C distance registers on Pi5 (0x2B) and GPIO trig/echo on legacy.
+    mode: "auto"  # auto|i2c|gpio
+
+    # Pi5 I2C ultrasonic (same controller as motors)
+    i2c_bus: 1
+    i2c_addr: 43  # 0x2B
+    i2c_protocol: "auto"
+    i2c_required: false
+    dry_run: false
+
     gpio_backend: "auto"  # auto|rpi|lgpio
     gpio_mode: "BOARD"   # BOARD or BCM
     lgpio_chip: -1  # auto-select (Pi 5 often needs gpiochip4)
@@ -47,3 +81,33 @@ opencv_camera:
     fps: 30.0
     jpeg_quality: 80
     topic: "image_raw/compressed"
+
+camera_gimbal:
+  ros__parameters:
+    i2c_bus: 1
+    # Same controller as motors on Pi 5
+    i2c_addr: 43  # 0x2B
+    i2c_protocol: "auto"  # auto|pi5|legacy
+    i2c_required: true
+    dry_run: false
+
+    # Yahboom servo IDs are typically 1 (pan) and 2 (tilt)
+    pan_servo_id: 1
+    tilt_servo_id: 2
+
+    # Tune these for your physical neutral position
+    pan_neutral_deg: 90.0
+    tilt_neutral_deg: 90.0
+
+    pan_min_deg: 0.0
+    pan_max_deg: 180.0
+    tilt_min_deg: 0.0
+    # Conservative default for Pi 5 vendor protocol; increase if safe.
+    tilt_max_deg: 110.0
+
+    command_topic: "camera_gimbal/command_deg"
+    startup_delay_sec: 1.0
+    reset_on_startup: true
+    reset_on_shutdown: true
+    command_timeout_sec: 0.0
+    publish_hz: 20.0

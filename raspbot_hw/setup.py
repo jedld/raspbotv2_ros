@@ -22,9 +22,11 @@ setup(
     entry_points={
         'console_scripts': [
             'motor_driver = raspbot_hw.motor_driver_node:main',
+            'motor_id_test = raspbot_hw.motor_id_test_node:main',
             'ultrasonic = raspbot_hw.ultrasonic_node:main',
             'gpio_sensors = raspbot_hw.gpio_sensors_node:main',
             'opencv_camera = raspbot_hw.opencv_camera_node:main',
+            'camera_gimbal = raspbot_hw.camera_gimbal_node:main',
         ],
     },
 )
