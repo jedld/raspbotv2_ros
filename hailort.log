@@ -1,0 +1,50 @@
+[2026-02-09 19:37:53.387] [1253] [HailoRT] [info] [vdevice.cpp:535] [create] Creating vdevice with params: device_count: 1, scheduling_algorithm: ROUND_ROBIN, multi_process_service: false
+[2026-02-09 19:37:53.419] [1253] [HailoRT] [info] [device.cpp:51] [Device] OS Version: Linux 6.8.0-1047-raspi #51-Ubuntu SMP PREEMPT_DYNAMIC Fri Jan 23 17:31:55 UTC 2026 aarch64
+[2026-02-09 19:37:53.426] [1253] [HailoRT] [info] [control.cpp:113] [control__parse_identify_results] firmware_version is: 4.23.0
+[2026-02-09 19:37:53.429] [1253] [HailoRT] [info] [vdevice.cpp:682] [create] VDevice Infos: 0000:01:00.0
+[2026-02-09 19:37:53.687] [1253] [HailoRT] [info] [hef.cpp:1994] [get_network_group_and_network_name] No name was given. Addressing all networks of default network_group: yolox_s_leaky
+[2026-02-09 19:37:53.687] [1253] [HailoRT] [info] [hef.cpp:1994] [get_network_group_and_network_name] No name was given. Addressing all networks of default network_group: yolox_s_leaky
+[2026-02-09 19:37:53.713] [1253] [HailoRT] [info] [internal_buffer_manager.cpp:75] [print_execution_results] Default Internal buffer planner failed to meet requirements
+[2026-02-09 19:37:53.713] [1253] [HailoRT] [info] [internal_buffer_manager.cpp:86] [print_execution_results] Default Internal buffer planner executed successfully
+[2026-02-09 19:37:53.737] [1253] [HailoRT] [info] [device_internal.cpp:57] [configure] Configuring HEF took 46.350026 milliseconds
+[2026-02-09 19:37:53.739] [1253] [HailoRT] [info] [vdevice.cpp:780] [configure] Configuring HEF on VDevice took 51.231347 milliseconds
+[2026-02-09 19:37:53.739] [1253] [HailoRT] [info] [infer_model.cpp:417] [configure] Configuring network group 'yolox_s_leaky' with params: batch size: 0, power mode: PERFORMANCE, latency: NONE
+[2026-02-09 19:37:53.741] [1253] [HailoRT] [info] [multi_io_elements.cpp:754] [create] Created (AsyncHwEl)
+[2026-02-09 19:37:53.742] [1253] [HailoRT] [info] [queue_elements.cpp:450] [create] Created (EntryPushQEl0yolox_s_leaky/input_layer1 | timeout: 10s)
+[2026-02-09 19:37:53.742] [1253] [HailoRT] [info] [filter_elements.cpp:101] [create] Created (PreInferEl3yolox_s_leaky/input_layer1 | Reorder - src_order: NHWC, src_shape: (640, 640, 3), dst_order: NHCW, dst_shape: (640, 640, 3))
+[2026-02-09 19:37:53.742] [1253] [HailoRT] [info] [queue_elements.cpp:450] [create] Created (PushQEl3yolox_s_leaky/input_layer1 | timeout: 10s)
+[2026-02-09 19:37:53.742] [1253] [HailoRT] [info] [multi_io_elements.cpp:135] [create] Created (NmsPPMuxEl0YOLOX-Post-Process | Op YOLOX, Name: YOLOX-Post-Process, Score threshold: 0.450, IoU threshold: 0.45, Classes: 80, Max bboxes total: 40, Image height: 640, Image width: 640)
+[2026-02-09 19:37:53.754] [1253] [HailoRT] [info] [queue_elements.cpp:942] [create] Created (MultiPushQEl0YOLOX-Post-Process | timeout: 10s)
+[2026-02-09 19:37:53.754] [1253] [HailoRT] [info] [edge_elements.cpp:187] [create] Created (LastAsyncEl0NmsPPMuxEl0YOLOX-Post-Process)
+[2026-02-09 19:37:53.754] [1253] [HailoRT] [info] [pipeline.cpp:891] [print_deep_description] EntryPushQEl0yolox_s_leaky/input_layer1 | inputs: user | outputs: PreInferEl3yolox_s_leaky/input_layer1(running in thread_id: 1352)
+[2026-02-09 19:37:53.756] [1253] [HailoRT] [info] [pipeline.cpp:891] [print_deep_description] PreInferEl3yolox_s_leaky/input_layer1 | inputs: EntryPushQEl0yolox_s_leaky/input_layer1[0] | outputs: PushQEl3yolox_s_leaky/input_layer1
+[2026-02-09 19:37:53.756] [1253] [HailoRT] [info] [pipeline.cpp:891] [print_deep_description] PushQEl3yolox_s_leaky/input_layer1 | inputs: PreInferEl3yolox_s_leaky/input_layer1[0] | outputs: AsyncHwEl(running in thread_id: 1353)
+[2026-02-09 19:37:53.756] [1253] [HailoRT] [info] [pipeline.cpp:891] [print_deep_description] AsyncHwEl | inputs: PushQEl3yolox_s_leaky/input_layer1[0] | outputs: MultiPushQEl0YOLOX-Post-Process MultiPushQEl0YOLOX-Post-Process MultiPushQEl0YOLOX-Post-Process MultiPushQEl0YOLOX-Post-Process MultiPushQEl0YOLOX-Post-Process MultiPushQEl0YOLOX-Post-Process MultiPushQEl0YOLOX-Post-Process MultiPushQEl0YOLOX-Post-Process MultiPushQEl0YOLOX-Post-Process
+[2026-02-09 19:37:53.757] [1253] [HailoRT] [info] [pipeline.cpp:891] [print_deep_description] MultiPushQEl0YOLOX-Post-Process | inputs: AsyncHwEl[0] AsyncHwEl[1] AsyncHwEl[2] AsyncHwEl[3] AsyncHwEl[4] AsyncHwEl[5] AsyncHwEl[6] AsyncHwEl[7] AsyncHwEl[8] | outputs: NmsPPMuxEl0YOLOX-Post-Process(running in thread_id: 1354)
+[2026-02-09 19:37:53.757] [1253] [HailoRT] [info] [pipeline.cpp:891] [print_deep_description] NmsPPMuxEl0YOLOX-Post-Process | inputs: MultiPushQEl0YOLOX-Post-Process[0] | outputs: LastAsyncEl0NmsPPMuxEl0YOLOX-Post-Process
+[2026-02-09 19:37:53.757] [1253] [HailoRT] [info] [pipeline.cpp:891] [print_deep_description] LastAsyncEl0NmsPPMuxEl0YOLOX-Post-Process | inputs: NmsPPMuxEl0YOLOX-Post-Process[0] | outputs: user
+[2026-02-09 20:03:01.527] [12109] [HailoRT] [info] [vdevice.cpp:535] [create] Creating vdevice with params: device_count: 1, scheduling_algorithm: ROUND_ROBIN, multi_process_service: false
+[2026-02-09 20:03:01.557] [12109] [HailoRT] [info] [device.cpp:51] [Device] OS Version: Linux 6.8.0-1047-raspi #51-Ubuntu SMP PREEMPT_DYNAMIC Fri Jan 23 17:31:55 UTC 2026 aarch64
+[2026-02-09 20:03:01.559] [12109] [HailoRT] [info] [control.cpp:113] [control__parse_identify_results] firmware_version is: 4.23.0
+[2026-02-09 20:03:01.559] [12109] [HailoRT] [info] [vdevice.cpp:682] [create] VDevice Infos: 0000:01:00.0
+[2026-02-09 20:03:01.723] [12109] [HailoRT] [info] [hef.cpp:1994] [get_network_group_and_network_name] No name was given. Addressing all networks of default network_group: yolox_s_leaky
+[2026-02-09 20:03:01.723] [12109] [HailoRT] [info] [hef.cpp:1994] [get_network_group_and_network_name] No name was given. Addressing all networks of default network_group: yolox_s_leaky
+[2026-02-09 20:03:01.740] [12109] [HailoRT] [info] [internal_buffer_manager.cpp:75] [print_execution_results] Default Internal buffer planner failed to meet requirements
+[2026-02-09 20:03:01.740] [12109] [HailoRT] [info] [internal_buffer_manager.cpp:86] [print_execution_results] Default Internal buffer planner executed successfully
+[2026-02-09 20:03:01.759] [12109] [HailoRT] [info] [device_internal.cpp:57] [configure] Configuring HEF took 35.668453 milliseconds
+[2026-02-09 20:03:01.759] [12109] [HailoRT] [info] [vdevice.cpp:780] [configure] Configuring HEF on VDevice took 36.16794 milliseconds
+[2026-02-09 20:03:01.759] [12109] [HailoRT] [info] [infer_model.cpp:417] [configure] Configuring network group 'yolox_s_leaky' with params: batch size: 0, power mode: PERFORMANCE, latency: NONE
+[2026-02-09 20:03:01.787] [12109] [HailoRT] [info] [multi_io_elements.cpp:754] [create] Created (AsyncHwEl)
+[2026-02-09 20:03:01.787] [12109] [HailoRT] [info] [queue_elements.cpp:450] [create] Created (EntryPushQEl0yolox_s_leaky/input_layer1 | timeout: 10s)
+[2026-02-09 20:03:01.787] [12109] [HailoRT] [info] [filter_elements.cpp:101] [create] Created (PreInferEl3yolox_s_leaky/input_layer1 | Reorder - src_order: NHWC, src_shape: (640, 640, 3), dst_order: NHCW, dst_shape: (640, 640, 3))
+[2026-02-09 20:03:01.788] [12109] [HailoRT] [info] [queue_elements.cpp:450] [create] Created (PushQEl3yolox_s_leaky/input_layer1 | timeout: 10s)
+[2026-02-09 20:03:01.788] [12109] [HailoRT] [info] [multi_io_elements.cpp:135] [create] Created (NmsPPMuxEl0YOLOX-Post-Process | Op YOLOX, Name: YOLOX-Post-Process, Score threshold: 0.450, IoU threshold: 0.45, Classes: 80, Max bboxes total: 40, Image height: 640, Image width: 640)
+[2026-02-09 20:03:01.798] [12109] [HailoRT] [info] [queue_elements.cpp:942] [create] Created (MultiPushQEl0YOLOX-Post-Process | timeout: 10s)
+[2026-02-09 20:03:01.798] [12109] [HailoRT] [info] [edge_elements.cpp:187] [create] Created (LastAsyncEl0NmsPPMuxEl0YOLOX-Post-Process)
+[2026-02-09 20:03:01.798] [12109] [HailoRT] [info] [pipeline.cpp:891] [print_deep_description] EntryPushQEl0yolox_s_leaky/input_layer1 | inputs: user | outputs: PreInferEl3yolox_s_leaky/input_layer1(running in thread_id: 12210)
+[2026-02-09 20:03:01.807] [12109] [HailoRT] [info] [pipeline.cpp:891] [print_deep_description] PreInferEl3yolox_s_leaky/input_layer1 | inputs: EntryPushQEl0yolox_s_leaky/input_layer1[0] | outputs: PushQEl3yolox_s_leaky/input_layer1
+[2026-02-09 20:03:01.807] [12109] [HailoRT] [info] [pipeline.cpp:891] [print_deep_description] PushQEl3yolox_s_leaky/input_layer1 | inputs: PreInferEl3yolox_s_leaky/input_layer1[0] | outputs: AsyncHwEl(running in thread_id: 12211)
+[2026-02-09 20:03:01.807] [12109] [HailoRT] [info] [pipeline.cpp:891] [print_deep_description] AsyncHwEl | inputs: PushQEl3yolox_s_leaky/input_layer1[0] | outputs: MultiPushQEl0YOLOX-Post-Process MultiPushQEl0YOLOX-Post-Process MultiPushQEl0YOLOX-Post-Process MultiPushQEl0YOLOX-Post-Process MultiPushQEl0YOLOX-Post-Process MultiPushQEl0YOLOX-Post-Process MultiPushQEl0YOLOX-Post-Process MultiPushQEl0YOLOX-Post-Process MultiPushQEl0YOLOX-Post-Process
+[2026-02-09 20:03:01.878] [12109] [HailoRT] [info] [pipeline.cpp:891] [print_deep_description] MultiPushQEl0YOLOX-Post-Process | inputs: AsyncHwEl[0] AsyncHwEl[1] AsyncHwEl[2] AsyncHwEl[3] AsyncHwEl[4] AsyncHwEl[5] AsyncHwEl[6] AsyncHwEl[7] AsyncHwEl[8] | outputs: NmsPPMuxEl0YOLOX-Post-Process(running in thread_id: 12212)
+[2026-02-09 20:03:01.878] [12109] [HailoRT] [info] [pipeline.cpp:891] [print_deep_description] NmsPPMuxEl0YOLOX-Post-Process | inputs: MultiPushQEl0YOLOX-Post-Process[0] | outputs: LastAsyncEl0NmsPPMuxEl0YOLOX-Post-Process
+[2026-02-09 20:03:01.878] [12109] [HailoRT] [info] [pipeline.cpp:891] [print_deep_description] LastAsyncEl0NmsPPMuxEl0YOLOX-Post-Process | inputs: NmsPPMuxEl0YOLOX-Post-Process[0] | outputs: user

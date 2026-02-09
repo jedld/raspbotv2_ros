@@ -1,3 +1,5 @@
+import os
+
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition
@@ -23,6 +25,7 @@ def generate_launch_description():
     hailo_pan_sign = LaunchConfiguration('hailo_pan_sign')
     hailo_tilt_sign = LaunchConfiguration('hailo_tilt_sign')
     tracking_config_topic = LaunchConfiguration('tracking_config_topic')
+    follow_enable_topic = LaunchConfiguration('follow_enable_topic')
     params_file = LaunchConfiguration('params_file')
 
     default_params_file = PathJoinSubstitution([
@@ -57,13 +60,16 @@ def generate_launch_description():
         DeclareLaunchArgument('enable_gimbal', default_value='true'),
         DeclareLaunchArgument('enable_oled', default_value='true'),
         DeclareLaunchArgument('play_startup_sound', default_value='true'),
-        DeclareLaunchArgument('enable_web_video', default_value='false'),
-        DeclareLaunchArgument('enable_hailo', default_value='false'),
-        DeclareLaunchArgument('hailo_hef_path', default_value=''),
-        DeclareLaunchArgument('hailo_labels_path', default_value=''),
+        DeclareLaunchArgument('enable_web_video', default_value='true'),
+        DeclareLaunchArgument('enable_hailo', default_value='true'),
+        DeclareLaunchArgument('hailo_hef_path', default_value=
+            os.path.expanduser('~/.local/share/raspbot/models/hailo8/yolov5s_personface.hef')),
+        DeclareLaunchArgument('hailo_labels_path', default_value=
+            os.path.expanduser('~/.local/share/raspbot/models/hailo8/personface.labels')),
         DeclareLaunchArgument('hailo_pan_sign', default_value='-1'),
         DeclareLaunchArgument('hailo_tilt_sign', default_value='-1'),
         DeclareLaunchArgument('tracking_config_topic', default_value='tracking/config'),
+        DeclareLaunchArgument('follow_enable_topic', default_value='follow/enable'),
         DeclareLaunchArgument('params_file', default_value=default_params_file),
 
         IncludeLaunchDescription(
@@ -105,6 +111,7 @@ def generate_launch_description():
                 'detections_topic': 'detections/json',
                 'tracking_enable_topic': 'tracking/enable',
                 'tracking_config_topic': tracking_config_topic,
+                'follow_enable_topic': follow_enable_topic,
             }.items(),
             condition=IfCondition(enable_web_video),
         ),
@@ -118,6 +125,7 @@ def generate_launch_description():
                 'detections_topic': 'detections/json',
                 'tracking_enable_topic': 'tracking/enable',
                 'tracking_config_topic': tracking_config_topic,
+                'follow_enable_topic': follow_enable_topic,
                 'gimbal_topic': 'camera_gimbal/command_deg',
                 'pan_sign': hailo_pan_sign,
                 'tilt_sign': hailo_tilt_sign,

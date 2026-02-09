@@ -1,8 +1,11 @@
 #include <rclcpp/rclcpp.hpp>
 
+#include <geometry_msgs/msg/twist.hpp>
 #include <geometry_msgs/msg/vector3.hpp>
 #include <sensor_msgs/msg/compressed_image.hpp>
+#include <sensor_msgs/msg/range.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include <std_msgs/msg/float64.hpp>
 #include <std_msgs/msg/int32_multi_array.hpp>
 #include <std_msgs/msg/string.hpp>
 
@@ -92,7 +95,8 @@ public:
 
         // Tracking
         declare_parameter<bool>("tracking_enabled", false);
-        declare_parameter<int>("person_class_id", -1);
+        declare_parameter<int>("track_class_id", -1);
+        declare_parameter<std::string>("track_label", "face");  // auto-pick: prefer face, fallback to person
         declare_parameter<double>("kp_pan_deg", 28.0);
         declare_parameter<double>("kp_tilt_deg", 20.0);
         declare_parameter<double>("max_step_deg", 6.0);
@@ -105,18 +109,56 @@ public:
         declare_parameter<double>("tilt_min_deg", 0.0);
         declare_parameter<double>("tilt_max_deg", 110.0);
         declare_parameter<double>("pan_neutral_deg", 90.0);
-        declare_parameter<double>("tilt_neutral_deg", 90.0);
+        declare_parameter<double>("tilt_neutral_deg", 45.0);
+
+        // Auto-follow (robot base movement to follow a subject)
+        declare_parameter<bool>("follow_enabled", false);
+        declare_parameter<std::string>("follow_cmd_vel_topic", "cmd_vel");
+        declare_parameter<std::string>("follow_enable_topic", "follow/enable");
+        declare_parameter<std::string>("follow_target_area_topic", "follow/target_area");
+        declare_parameter<std::string>("follow_max_linear_topic", "follow/max_linear");
+        declare_parameter<double>("follow_target_bbox_area", 0.04);
+        declare_parameter<double>("follow_kp_linear", 0.8);
+        declare_parameter<double>("follow_ki_linear", 0.05);
+        declare_parameter<double>("follow_kd_linear", 0.1);
+        declare_parameter<double>("follow_kp_angular", 1.2);
+        declare_parameter<double>("follow_ki_angular", 0.05);
+        declare_parameter<double>("follow_kd_angular", 0.1);
+        declare_parameter<double>("follow_max_linear", 0.3);
+        declare_parameter<double>("follow_max_angular", 0.8);
+        declare_parameter<double>("follow_linear_deadband", 0.02);
+        declare_parameter<double>("follow_angular_deadband", 0.05);
+        declare_parameter<double>("follow_lost_timeout_sec", 1.0);
+        declare_parameter<bool>("follow_use_gimbal_feedback", true);
+        declare_parameter<double>("follow_scan_speed_deg", 30.0);
+        declare_parameter<double>("follow_scan_pause_sec", 0.4);
+        declare_parameter<int>("follow_scan_max_sweeps", 3);
+        declare_parameter<double>("follow_gimbal_recenter_kp", 0.10);
+        declare_parameter<double>("follow_angular_blend", 0.5);
+
+        // Ultrasonic obstacle avoidance
+        declare_parameter<std::string>("follow_ultrasonic_topic", "ultrasonic/range");
+        declare_parameter<double>("follow_obstacle_stop_m", 0.20);
+        declare_parameter<double>("follow_obstacle_slow_m", 0.50);
 
         const auto input_topic = get_parameter("input_topic").as_string();
         const auto detections_topic = get_parameter("detections_topic").as_string();
         const auto tracking_enable_topic = get_parameter("tracking_enable_topic").as_string();
         const auto tracking_config_topic = get_parameter("tracking_config_topic").as_string();
         const auto gimbal_topic = get_parameter("gimbal_topic").as_string();
+        const auto follow_cmd_vel_topic = get_parameter("follow_cmd_vel_topic").as_string();
+        const auto follow_enable_topic = get_parameter("follow_enable_topic").as_string();
+        const auto follow_target_area_topic = get_parameter("follow_target_area_topic").as_string();
+        const auto follow_max_linear_topic = get_parameter("follow_max_linear_topic").as_string();
 
         detections_pub_ = create_publisher<std_msgs::msg::String>(detections_topic, 10);
         gimbal_pub_ = create_publisher<geometry_msgs::msg::Vector3>(gimbal_topic, 10);
+        cmd_vel_pub_ = create_publisher<geometry_msgs::msg::Twist>(follow_cmd_vel_topic, 10);
 
         tracking_enabled_.store(get_parameter("tracking_enabled").as_bool());
+        follow_enabled_.store(get_parameter("follow_enabled").as_bool());
+        follow_target_bbox_area_.store(get_parameter("follow_target_bbox_area").as_double());
+        follow_max_linear_.store(get_parameter("follow_max_linear").as_double());
         pan_sign_live_.store(norm_sign(get_parameter("pan_sign").as_int()));
         tilt_sign_live_.store(norm_sign(get_parameter("tilt_sign").as_int()));
 
@@ -140,6 +182,48 @@ public:
                 }
             });
 
+        follow_enable_sub_ = create_subscription<std_msgs::msg::Bool>(
+            follow_enable_topic, 10,
+            [this](const std_msgs::msg::Bool::SharedPtr msg) {
+                const bool was_enabled = follow_enabled_.exchange(static_cast<bool>(msg->data));
+                if (was_enabled && !msg->data) {
+                    publish_stop_cmd_vel();
+                    reset_follow_pid();
+                }
+                RCLCPP_INFO(get_logger(), "Follow %s", msg->data ? "ENABLED" : "DISABLED");
+            });
+
+        follow_target_area_sub_ = create_subscription<std_msgs::msg::Float64>(
+            follow_target_area_topic, 10,
+            [this](const std_msgs::msg::Float64::SharedPtr msg) {
+                const double v = std::max(0.01, std::min(1.0, msg->data));
+                follow_target_bbox_area_.store(v);
+                RCLCPP_INFO(get_logger(), "Follow target bbox area set to %.3f", v);
+            });
+
+        follow_max_linear_sub_ = create_subscription<std_msgs::msg::Float64>(
+            follow_max_linear_topic, 10,
+            [this](const std_msgs::msg::Float64::SharedPtr msg) {
+                const double v = std::max(0.05, std::min(1.0, msg->data));
+                follow_max_linear_.store(v);
+                RCLCPP_INFO(get_logger(), "Follow max linear set to %.3f m/s", v);
+            });
+
+        // Ultrasonic obstacle avoidance
+        const auto ultrasonic_topic = get_parameter("follow_ultrasonic_topic").as_string();
+        ultrasonic_sub_ = create_subscription<sensor_msgs::msg::Range>(
+            ultrasonic_topic, 10,
+            [this](const sensor_msgs::msg::Range::SharedPtr msg) {
+                if (msg && !std::isnan(msg->range) && !std::isinf(msg->range)) {
+                    ultrasonic_range_m_.store(msg->range);
+                }
+            });
+        RCLCPP_INFO(get_logger(), "Ultrasonic topic: %s", ultrasonic_topic.c_str());
+
+        // Safety timer – sends stop when subject is lost for > timeout
+        follow_safety_timer_ = create_wall_timer(100ms,
+            std::bind(&HailoDetectorNode::follow_safety_check, this));
+
         img_sub_ = create_subscription<sensor_msgs::msg::CompressedImage>(
             input_topic, rclcpp::SensorDataQoS(),
             std::bind(&HailoDetectorNode::on_image, this, std::placeholders::_1));
@@ -159,6 +243,8 @@ public:
         RCLCPP_INFO(get_logger(), "tracking enable topic: %s", tracking_enable_topic.c_str());
         RCLCPP_INFO(get_logger(), "tracking config topic: %s", tracking_config_topic.c_str());
         RCLCPP_INFO(get_logger(), "gimbal topic: %s", gimbal_topic.c_str());
+        RCLCPP_INFO(get_logger(), "follow cmd_vel topic: %s", follow_cmd_vel_topic.c_str());
+        RCLCPP_INFO(get_logger(), "follow enable topic: %s", follow_enable_topic.c_str());
     }
 
 private:
@@ -193,14 +279,30 @@ private:
             labels_.push_back(line);
         }
 
-        // Auto-pick person_class_id if user didn't set one.
-        if (get_parameter("person_class_id").as_int() < 0) {
+        // Auto-pick track_class_id if user didn't set one.
+        // Prefer the label specified by track_label (default "face"),
+        // falling back to "person" if face is not found.
+        if (get_parameter("track_class_id").as_int() < 0) {
+            const auto preferred = get_parameter("track_label").as_string();
+            int fallback_id = -1;
             for (size_t i = 0; i < labels_.size(); i++) {
-                if (labels_[i] == "person") {
-                    person_class_id_cached_ = static_cast<int>(i);
+                if (labels_[i] == preferred) {
+                    track_class_id_cached_ = static_cast<int>(i);
+                    RCLCPP_INFO(get_logger(), "Auto-detected '%s' at class_id=%zu",
+                        preferred.c_str(), i);
                     break;
                 }
+                if (labels_[i] == "person" && fallback_id < 0) {
+                    fallback_id = static_cast<int>(i);
+                }
             }
+            if (track_class_id_cached_ < 0 && fallback_id >= 0) {
+                track_class_id_cached_ = fallback_id;
+                RCLCPP_INFO(get_logger(), "'%s' not found in labels, falling back to 'person' at class_id=%d",
+                    preferred.c_str(), fallback_id);
+            }
+        } else {
+            track_class_id_cached_ = static_cast<int>(get_parameter("track_class_id").as_int());
         }
     }
 
@@ -415,6 +517,10 @@ private:
         if (tracking_enabled_.load()) {
             maybe_track_person(orig_w, orig_h, dets);
         }
+
+        if (follow_enabled_.load()) {
+            follow_subject(dets);
+        }
     }
 
     void publish_detections_json(int32_t stamp_sec, uint32_t stamp_nanosec, int image_w, int image_h, const std::vector<Det> &dets)
@@ -465,17 +571,14 @@ private:
 
     void maybe_track_person(int image_w, int image_h, const std::vector<Det> &dets)
     {
-        int person_id = get_parameter("person_class_id").as_int();
-        if (person_id < 0) {
-            person_id = person_class_id_cached_;
-        }
+        const int track_id = track_class_id_cached_;
 
         const float score_thresh = static_cast<float>(get_parameter("score_threshold").as_double());
 
         const Det *best = nullptr;
         for (const auto &d : dets) {
             if (d.score < score_thresh) continue;
-            if (person_id >= 0 && d.class_id != person_id) continue;
+            if (track_id >= 0 && d.class_id != track_id) continue;
             if (best == nullptr || d.score > best->score) {
                 best = &d;
             }
@@ -511,6 +614,19 @@ private:
         pan_deg_ += pan_step;
         tilt_deg_ += tilt_step;
 
+        // When follow mode is active, add a re-centering spring that biases
+        // the gimbal toward neutral.  This forces the robot base to handle
+        // the heavy yaw so the gimbal stays near center and available for
+        // fast fine corrections.  The spring intentionally leaves a residual
+        // camera error so the base angular controller has a signal to react to.
+        if (follow_enabled_.load()) {
+            const double spring = get_parameter("follow_gimbal_recenter_kp").as_double();
+            const double pn = get_parameter("pan_neutral_deg").as_double();
+            const double tn = get_parameter("tilt_neutral_deg").as_double();
+            pan_deg_  += spring * (pn - pan_deg_);
+            tilt_deg_ += spring * (tn - tilt_deg_);
+        }
+
         const double pan_min = get_parameter("pan_min_deg").as_double();
         const double pan_max = get_parameter("pan_max_deg").as_double();
         const double tilt_min = get_parameter("tilt_min_deg").as_double();
@@ -524,6 +640,283 @@ private:
         cmd.y = tilt_deg_;
         cmd.z = 0.0;
         gimbal_pub_->publish(cmd);
+    }
+
+    // ----------------------------------------------------------------
+    // Auto-follow: closed-loop PID visual servoing for the robot base
+    // ----------------------------------------------------------------
+
+    void follow_subject(const std::vector<Det> &dets)
+    {
+        const int track_id = track_class_id_cached_;
+
+        const float score_thresh = static_cast<float>(get_parameter("score_threshold").as_double());
+
+        const Det *best = nullptr;
+        for (const auto &d : dets) {
+            if (d.score < score_thresh) continue;
+            if (track_id >= 0 && d.class_id != track_id) continue;
+            if (best == nullptr || d.score > best->score) {
+                best = &d;
+            }
+        }
+
+        const auto now = steady_clock::now();
+
+        if (best == nullptr) {
+            // No target – the safety timer will send stop after timeout.
+            return;
+        }
+
+        // Target found – update last-seen timestamp.
+        last_follow_detection_time_ = now;
+
+        // ---- Error signals ----
+
+        const float cx     = (best->x1 + best->x2) * 0.5f;
+        const float bbox_w = best->x2 - best->x1;
+        const float bbox_h = best->y2 - best->y1;
+        const float bbox_area = bbox_w * bbox_h;
+
+        // --- Angular error ---
+        //
+        // We blend two complementary signals for the robot base yaw:
+        //   1. Camera error  – raw bbox-centre offset (fast, direct reaction)
+        //   2. Gimbal offset – how far the gimbal has moved from neutral
+        //      (steady-state, lets the base "unwind" the gimbal back to centre)
+        //
+        // The gimbal re-centering spring (in maybe_track_person) intentionally
+        // prevents the gimbal from perfectly centring the bbox, so the camera
+        // error stays non-zero and gives the base a fast reaction signal.
+        // The blend factor alpha controls the mix (0 = all camera, 1 = all gimbal).
+        double err_angular = 0.0;
+
+        const double cam_err = static_cast<double>((cx - 0.5f) / 0.5f);  // −1 … +1
+        const int pan_sign = pan_sign_live_.load();
+
+        const bool use_gimbal_fb = get_parameter("follow_use_gimbal_feedback").as_bool();
+        if (use_gimbal_fb && tracking_enabled_.load()) {
+            const double pan_neutral = get_parameter("pan_neutral_deg").as_double();
+            const double pan_min    = get_parameter("pan_min_deg").as_double();
+            const double pan_max    = get_parameter("pan_max_deg").as_double();
+            const double half_range = std::max(1.0, (pan_max - pan_min) * 0.5);
+            const double gimbal_err = static_cast<double>(pan_sign)
+                                    * (pan_deg_ - pan_neutral) / half_range;  // −1 … +1
+
+            const double alpha = get_parameter("follow_angular_blend").as_double();
+            err_angular = alpha * gimbal_err + (1.0 - alpha) * cam_err;
+        } else {
+            // No gimbal tracking – use camera error directly.
+            err_angular = cam_err;
+        }
+
+        // --- Linear error (distance keeping via bbox area) ---
+        const double target_area = follow_target_bbox_area_.load();
+        // Positive when subject is too far (bbox smaller than target) → forward.
+        const double err_linear = target_area - static_cast<double>(bbox_area);
+
+        // ---- dt ----
+        double dt = 0.1;
+        if (follow_prev_time_.time_since_epoch().count() > 0) {
+            dt = std::chrono::duration<double>(now - follow_prev_time_).count();
+            dt = std::max(0.01, std::min(dt, 1.0));
+        }
+        follow_prev_time_ = now;
+
+        // ---- PID gains ----
+        const double kp_lin = get_parameter("follow_kp_linear").as_double();
+        const double ki_lin = get_parameter("follow_ki_linear").as_double();
+        const double kd_lin = get_parameter("follow_kd_linear").as_double();
+        const double kp_ang = get_parameter("follow_kp_angular").as_double();
+        const double ki_ang = get_parameter("follow_ki_angular").as_double();
+        const double kd_ang = get_parameter("follow_kd_angular").as_double();
+
+        // ---- Deadbands ----
+        const double db_lin = get_parameter("follow_linear_deadband").as_double();
+        const double db_ang = get_parameter("follow_angular_deadband").as_double();
+        const double eff_lin = (std::abs(err_linear)  < db_lin) ? 0.0 : err_linear;
+        const double eff_ang = (std::abs(err_angular) < db_ang) ? 0.0 : err_angular;
+
+        // ---- Integral (anti-windup clamp) ----
+        follow_integral_linear_  += eff_lin * dt;
+        follow_integral_angular_ += eff_ang * dt;
+        constexpr double kMaxIntegral = 2.0;
+        follow_integral_linear_  = std::max(-kMaxIntegral, std::min(kMaxIntegral, follow_integral_linear_));
+        follow_integral_angular_ = std::max(-kMaxIntegral, std::min(kMaxIntegral, follow_integral_angular_));
+
+        // ---- Derivative ----
+        const double d_lin = (dt > 1e-3) ? (eff_lin - follow_prev_err_linear_)  / dt : 0.0;
+        const double d_ang = (dt > 1e-3) ? (eff_ang - follow_prev_err_angular_) / dt : 0.0;
+        follow_prev_err_linear_  = eff_lin;
+        follow_prev_err_angular_ = eff_ang;
+
+        // ---- PID output ----
+        double cmd_linear  =  (kp_lin * eff_lin + ki_lin * follow_integral_linear_  + kd_lin * d_lin);
+        // Negative: +err_angular (subject right) → −angular.z (clockwise in ROS).
+        double cmd_angular = -(kp_ang * eff_ang + ki_ang * follow_integral_angular_ + kd_ang * d_ang);
+
+        // ---- Clamp to safe velocity limits ----
+        const double max_lin = follow_max_linear_.load();
+        const double max_ang = get_parameter("follow_max_angular").as_double();
+        cmd_linear  = std::max(-max_lin, std::min(max_lin, cmd_linear));
+        cmd_angular = std::max(-max_ang, std::min(max_ang, cmd_angular));
+
+        // ---- Ultrasonic obstacle avoidance (forward motion only) ----
+        if (cmd_linear > 0.0) {
+            const double range_m = ultrasonic_range_m_.load();
+            const double stop_m  = get_parameter("follow_obstacle_stop_m").as_double();
+            const double slow_m  = get_parameter("follow_obstacle_slow_m").as_double();
+
+            if (range_m <= stop_m) {
+                cmd_linear = 0.0;
+                RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
+                    "follow: OBSTACLE at %.2fm – forward motion blocked", range_m);
+            } else if (range_m < slow_m && slow_m > stop_m) {
+                const double scale = (range_m - stop_m) / (slow_m - stop_m);
+                cmd_linear *= scale;
+                RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 2000,
+                    "follow: obstacle at %.2fm – speed scaled to %.0f%%",
+                    range_m, scale * 100.0);
+            }
+        }
+
+        // ---- Publish Twist ----
+        geometry_msgs::msg::Twist twist;
+        twist.linear.x  = cmd_linear;
+        twist.angular.z = cmd_angular;
+        cmd_vel_pub_->publish(twist);
+
+        RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 2000,
+            "follow: area=%.3f err_lin=%.3f err_ang=%.3f(cam=%.2f) -> v=%.2f w=%.2f pan=%.0f us=%.2fm",
+            static_cast<double>(bbox_area), err_linear, err_angular, cam_err,
+            cmd_linear, cmd_angular, pan_deg_, ultrasonic_range_m_.load());
+    }
+
+    /// Called at 10 Hz – manages lost-target state machine:
+    ///   TRACKING → (lost for timeout) → SCANNING → (found) → TRACKING
+    ///                                            → (sweeps exhausted) → IDLE
+    void follow_safety_check()
+    {
+        if (!follow_enabled_.load()) {
+            if (scan_state_ != ScanState::IDLE) {
+                end_scan();
+            }
+            return;
+        }
+
+        const auto now = steady_clock::now();
+
+        switch (scan_state_) {
+        case ScanState::IDLE:
+        {
+            // Normal tracking – check if we lost the target.
+            if (last_follow_detection_time_.time_since_epoch().count() == 0) {
+                return;  // never seen a target yet
+            }
+            const double elapsed = std::chrono::duration<double>(
+                now - last_follow_detection_time_).count();
+            const double timeout = get_parameter("follow_lost_timeout_sec").as_double();
+            if (elapsed > timeout) {
+                publish_stop_cmd_vel();
+                reset_follow_pid();
+                begin_scan(now);
+            }
+            break;
+        }
+        case ScanState::SWEEPING:
+        {
+            // Check if subject was re-detected (follow_subject updates
+            // last_follow_detection_time_ when it finds a target).
+            if (last_follow_detection_time_ > scan_started_at_) {
+                RCLCPP_INFO(get_logger(), "follow-scan: target RE-ACQUIRED");
+                end_scan();
+                return;
+            }
+
+            // Drive the gimbal toward the current scan edge.
+            const double speed = get_parameter("follow_scan_speed_deg").as_double();
+            const double dt = 0.1;  // timer period
+            double step = speed * dt * (scan_direction_right_ ? 1.0 : -1.0);
+            step *= static_cast<double>(pan_sign_live_.load());
+            pan_deg_ += step;
+
+            const double pan_min = get_parameter("pan_min_deg").as_double();
+            const double pan_max = get_parameter("pan_max_deg").as_double();
+            pan_deg_ = std::max(pan_min, std::min(pan_max, pan_deg_));
+
+            geometry_msgs::msg::Vector3 cmd;
+            cmd.x = pan_deg_;
+            cmd.y = tilt_deg_;
+            cmd.z = 0.0;
+            gimbal_pub_->publish(cmd);
+
+            // Check if we hit the edge – switch direction.
+            if (pan_deg_ <= pan_min + 1.0 || pan_deg_ >= pan_max - 1.0) {
+                scan_direction_right_ = !scan_direction_right_;
+                scan_sweep_count_++;
+                const int max_sweeps = get_parameter("follow_scan_max_sweeps").as_int();
+                if (scan_sweep_count_ >= max_sweeps) {
+                    RCLCPP_WARN(get_logger(),
+                        "follow-scan: %d sweeps done, target NOT found – giving up",
+                        scan_sweep_count_);
+                    end_scan();
+                    // Return gimbal to neutral.
+                    pan_deg_ = get_parameter("pan_neutral_deg").as_double();
+                    tilt_deg_ = get_parameter("tilt_neutral_deg").as_double();
+                    geometry_msgs::msg::Vector3 center;
+                    center.x = pan_deg_;
+                    center.y = tilt_deg_;
+                    center.z = 0.0;
+                    gimbal_pub_->publish(center);
+                    // Reset follow detection so we don't immediately re-enter scan.
+                    last_follow_detection_time_ = steady_clock::time_point(
+                        steady_clock::duration::zero());
+                }
+            }
+
+            RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 1000,
+                "follow-scan: sweeping %s, pan=%.1f, sweep %d",
+                scan_direction_right_ ? "RIGHT" : "LEFT",
+                pan_deg_, scan_sweep_count_);
+            break;
+        }
+        }  // switch
+    }
+
+    void begin_scan(const steady_clock::time_point &now)
+    {
+        scan_state_ = ScanState::SWEEPING;
+        scan_started_at_ = now;
+        scan_sweep_count_ = 0;
+
+        // Start scanning in the direction the gimbal was already offset.
+        const double pan_neutral = get_parameter("pan_neutral_deg").as_double();
+        scan_direction_right_ = (pan_deg_ >= pan_neutral);
+
+        RCLCPP_WARN(get_logger(), "follow-scan: target LOST – starting gimbal scan");
+    }
+
+    void end_scan()
+    {
+        scan_state_ = ScanState::IDLE;
+        scan_sweep_count_ = 0;
+    }
+
+    void publish_stop_cmd_vel()
+    {
+        geometry_msgs::msg::Twist twist;
+        twist.linear.x  = 0.0;
+        twist.angular.z = 0.0;
+        cmd_vel_pub_->publish(twist);
+    }
+
+    void reset_follow_pid()
+    {
+        follow_integral_linear_  = 0.0;
+        follow_integral_angular_ = 0.0;
+        follow_prev_err_linear_  = 0.0;
+        follow_prev_err_angular_ = 0.0;
+        follow_prev_time_ = steady_clock::time_point(steady_clock::duration::zero());
     }
 
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr detections_pub_;
@@ -553,10 +946,35 @@ private:
     size_t output_frame_size_{0};
 
     std::vector<std::string> labels_;
-    int person_class_id_cached_{-1};
+    int track_class_id_cached_{-1};
 
     double pan_deg_{90.0};
     double tilt_deg_{90.0};
+
+    // Auto-follow state
+    rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub_;
+    rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr follow_enable_sub_;
+    rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr follow_target_area_sub_;
+    rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr follow_max_linear_sub_;
+    rclcpp::Subscription<sensor_msgs::msg::Range>::SharedPtr ultrasonic_sub_;
+    std::atomic<double> ultrasonic_range_m_{999.0};
+    rclcpp::TimerBase::SharedPtr follow_safety_timer_;
+    std::atomic<bool> follow_enabled_{false};
+    std::atomic<double> follow_target_bbox_area_{0.04};
+    std::atomic<double> follow_max_linear_{0.3};
+    steady_clock::time_point last_follow_detection_time_{steady_clock::duration::zero()};
+    steady_clock::time_point follow_prev_time_{steady_clock::duration::zero()};
+    double follow_integral_linear_{0.0};
+    double follow_integral_angular_{0.0};
+    double follow_prev_err_linear_{0.0};
+    double follow_prev_err_angular_{0.0};
+
+    // Gimbal scan-to-reacquire state
+    enum class ScanState { IDLE, SWEEPING };
+    ScanState scan_state_{ScanState::IDLE};
+    steady_clock::time_point scan_started_at_{steady_clock::duration::zero()};
+    bool scan_direction_right_{true};
+    int scan_sweep_count_{0};
 
     steady_clock::time_point last_infer_time_;
 };

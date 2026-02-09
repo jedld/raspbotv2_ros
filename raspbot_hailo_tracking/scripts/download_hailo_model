@@ -17,6 +17,9 @@ import urllib.request
 _COMPILED_VERSION = "v2.17.0"
 _BASE = f"https://hailo-model-zoo.s3.eu-west-2.amazonaws.com/ModelZoo/Compiled/{_COMPILED_VERSION}/hailo8"
 
+# yolov5s_personface was removed from v2.14.0+; use v2.12.0 for that model.
+_BASE_V2_12 = "https://hailo-model-zoo.s3.eu-west-2.amazonaws.com/ModelZoo/Compiled/v2.12.0/hailo8"
+
 MODEL_URLS = {
     # YOLOX (Apache-2.0): good default tradeoff for tracking + boxes.
     # Upstream: https://github.com/Megvii-BaseDetection/YOLOX
@@ -27,6 +30,27 @@ MODEL_URLS = {
     # Upstream: https://github.com/tensorflow/models
     "ssd_mobilenet_v1": f"{_BASE}/ssd_mobilenet_v1.hef",
     "ssd_mobilenet_v2": f"{_BASE}/ssd_mobilenet_v2.hef",
+
+    # YOLOv5s person+face (2 classes: person=0, face=1).
+    # On-device NMS (NMS_BY_CLASS) → compatible with existing parser.
+    # Best for face tracking with tighter bounding boxes.
+    # Only available at v2.12.0 (removed from v2.14.0+).
+    "yolov5s_personface": f"{_BASE_V2_12}/yolov5s_personface.hef",
+}
+
+# Labels for each model family.
+LABELS = {
+    "coco80": None,   # filled below (long string)
+    "personface": "person\nface\n",
+}
+
+# Map model → label file key.
+MODEL_LABELS = {
+    "yolox_s_leaky": "coco80",
+    "yolox_tiny": "coco80",
+    "ssd_mobilenet_v1": "coco80",
+    "ssd_mobilenet_v2": "coco80",
+    "yolov5s_personface": "personface",
 }
 
 
@@ -114,6 +138,9 @@ hair drier
 toothbrush
 """
 
+# Fill in the COCO80 labels reference.
+LABELS["coco80"] = COCO80_LABELS
+
 
 def _default_base_dir() -> Path:
     xdg = os.environ.get("XDG_DATA_HOME")
@@ -163,9 +190,9 @@ def main() -> int:
     )
     parser.add_argument(
         "--model",
-        default="yolox_s_leaky",
+        default="yolov5s_personface",
         choices=sorted(MODEL_URLS.keys()),
-        help="Which detector to download (default: yolox_s_leaky).",
+        help="Which detector to download (default: yolov5s_personface).",
     )
     parser.add_argument(
         "--dest-dir",
@@ -184,14 +211,20 @@ def main() -> int:
     url = MODEL_URLS[model]
 
     hef_path = dest_dir / f"{model}.hef"
-    labels_path = dest_dir / "coco80.labels"
+
+    # Use model-specific labels file.
+    labels_key = MODEL_LABELS.get(model, "coco80")
+    labels_filename = f"{labels_key}.labels"
+    labels_path = dest_dir / labels_filename
+    labels_content = LABELS[labels_key]
 
     _download(url, hef_path, force=args.force)
 
     # Write labels (small text file) for convenience.
     if (not labels_path.exists()) or args.force:
         labels_path.parent.mkdir(parents=True, exist_ok=True)
-        labels_path.write_text(COCO80_LABELS, encoding="utf-8")
+        labels_path.write_text(labels_content, encoding="utf-8")
+        print(f"Labels written: {labels_path}")
 
     print("\nDone.")
     print(f"hef_path: {hef_path}")

@@ -6,12 +6,33 @@ Packages:
 
 - `raspbot_hw`: I2C motor driver + GPIO sensors + optional camera publisher
 - `raspbot_bringup`: unified bringup launch
-- `raspbot_web_video`: tiny web MJPEG viewer for the camera topic
+- `raspbot_web_video`: tiny web MJPEG viewer for the camera topic (includes drive, gimbal, tracking, and follow controls)
+- `raspbot_hailo_tracking`: Hailo-8 object detection, gimbal person tracking, and auto-follow
 
 Start here:
 
-- Build: `colcon build --packages-select raspbot_hw raspbot_bringup`
+- Build: `colcon build --packages-select raspbot_hw raspbot_bringup raspbot_web_video raspbot_hailo_tracking`
 - Bringup: `ros2 launch raspbot_bringup bringup.launch.py enable_camera:=true`
+
+The standard bringup now includes the web server (port 8080), Hailo detection,
+gimbal tracking, and auto-follow by default. You can disable them individually:
+
+```bash
+# Disable Hailo detection/follow
+ros2 launch raspbot_bringup bringup.launch.py enable_hailo:=false
+
+# Disable web UI
+ros2 launch raspbot_bringup bringup.launch.py enable_web_video:=false
+```
+
+The Hailo node needs a model HEF and labels file. If `hailo_hef_path` is empty
+(the default), inference is disabled until you set it:
+
+```bash
+ros2 launch raspbot_bringup bringup.launch.py \
+  hailo_hef_path:=/path/to/model.hef \
+  hailo_labels_path:=/path/to/labels.txt
+```
 
 Quick component testing:
 

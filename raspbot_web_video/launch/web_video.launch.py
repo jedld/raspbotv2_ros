@@ -25,6 +25,7 @@ def generate_launch_description():
     detections_topic = LaunchConfiguration('detections_topic')
     tracking_enable_topic = LaunchConfiguration('tracking_enable_topic')
     tracking_config_topic = LaunchConfiguration('tracking_config_topic')
+    follow_enable_topic = LaunchConfiguration('follow_enable_topic')
 
     return LaunchDescription([
         DeclareLaunchArgument('topic', default_value='image_raw/compressed'),
@@ -37,7 +38,7 @@ def generate_launch_description():
         DeclareLaunchArgument('tilt_min_deg', default_value='0.0'),
         DeclareLaunchArgument('tilt_max_deg', default_value='110.0'),
         DeclareLaunchArgument('pan_neutral_deg', default_value='90.0'),
-        DeclareLaunchArgument('tilt_neutral_deg', default_value='90.0'),
+        DeclareLaunchArgument('tilt_neutral_deg', default_value='45.0'),
 
         DeclareLaunchArgument('cmd_vel_topic', default_value='cmd_vel'),
         DeclareLaunchArgument('max_linear_mps', default_value='0.25'),
@@ -47,6 +48,7 @@ def generate_launch_description():
         DeclareLaunchArgument('detections_topic', default_value='detections/json'),
         DeclareLaunchArgument('tracking_enable_topic', default_value='tracking/enable'),
         DeclareLaunchArgument('tracking_config_topic', default_value='tracking/config'),
+        DeclareLaunchArgument('follow_enable_topic', default_value='follow/enable'),
 
         Node(
             package='raspbot_web_video',
@@ -74,6 +76,7 @@ def generate_launch_description():
                 'detections_topic': detections_topic,
                 'tracking_enable_topic': tracking_enable_topic,
                 'tracking_config_topic': tracking_config_topic,
+                'follow_enable_topic': follow_enable_topic,
             }],
         ),
     ])

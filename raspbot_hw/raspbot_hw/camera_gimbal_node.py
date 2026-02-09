@@ -28,7 +28,7 @@ class CameraGimbalNode(Node):
         self.declare_parameter("tilt_servo_id", 2)
 
         self.declare_parameter("pan_neutral_deg", 90.0)
-        self.declare_parameter("tilt_neutral_deg", 90.0)
+        self.declare_parameter("tilt_neutral_deg", 45.0)
 
         self.declare_parameter("pan_min_deg", 0.0)
         self.declare_parameter("pan_max_deg", 180.0)

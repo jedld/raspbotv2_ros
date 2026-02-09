@@ -102,7 +102,7 @@ camera_gimbal:
 
     # Tune these for your physical neutral position
     pan_neutral_deg: 90.0
-    tilt_neutral_deg: 90.0
+    tilt_neutral_deg: 45.0
 
     pan_min_deg: 0.0
     pan_max_deg: 180.0

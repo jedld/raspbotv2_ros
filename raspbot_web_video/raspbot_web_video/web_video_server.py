@@ -13,7 +13,7 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from geometry_msgs.msg import Vector3, Twist
 from sensor_msgs.msg import CompressedImage
-from std_msgs.msg import Bool, String, Int32MultiArray
+from std_msgs.msg import Bool, Float64, String, Int32MultiArray
 
 
 INDEX_HTML = """<!doctype html>
@@ -101,6 +101,38 @@ INDEX_HTML = """<!doctype html>
                 <div class=\"kv\">Detections: <span id=\"detState\">n/a</span></div>
             </div>
         </div>
+
+        <div class=\"card\">
+            <h2>Auto Follow</h2>
+            <p class=\"muted\">Makes the robot base move to follow the detected subject at a set distance. Works alongside gimbal tracking.</p>
+            <div class=\"row\">
+                <button class=\"primary\" id=\"followBtn\">Enable auto follow</button>
+                <div class=\"kv\">Follow: <span id=\"followState\">off</span></div>
+            </div>
+            <div class=\"row\" style=\"margin-top: 8px;\">
+                <div>
+                    <label for=\"followDist\">Target distance (bbox area): <span id=\"followDistVal\">0.04</span></label>
+                    <input id=\"followDist\" type=\"range\" min=\"0.01\" max=\"0.30\" step=\"0.01\" value=\"0.04\" />
+                </div>
+                <div>
+                    <label for=\"followSpeed\">Max speed: <span id=\"followSpeedVal\">0.30</span> m/s</label>
+                    <input id=\"followSpeed\" type=\"range\" min=\"0.05\" max=\"0.50\" step=\"0.05\" value=\"0.30\" />
+                </div>
+            </div>
+            <div class=\"row\" style=\"margin-top: 4px;\">
+                <div class=\"kv\">Tip: stand at the desired distance and read the detection bbox area, then set the slider to match.</div>
+            </div>
+        </div>
+
+        <div class=\"card\">
+            <h2>&#128247; Snapshot</h2>
+            <p class=\"muted\">Capture a full-resolution still from the current camera frame.</p>
+            <div class=\"row\">
+                <button class=\"primary\" id=\"snapBtn\">Take Photo</button>
+                <div class=\"kv\" id=\"snapStatus\"></div>
+            </div>
+            <div id=\"snapHistory\" style=\"margin-top:8px; font-size:12px;\"></div>
+        </div>
   </div>
 
     <script>
@@ -121,8 +153,24 @@ INDEX_HTML = """<!doctype html>
         const boxesChk = document.getElementById('boxesChk');
         const invPanChk = document.getElementById('invPanChk');
         const invTiltChk = document.getElementById('invTiltChk');
+        const followBtn = document.getElementById('followBtn');
+        const followStateEl = document.getElementById('followState');
+        const followDist = document.getElementById('followDist');
+        const followDistVal = document.getElementById('followDistVal');
+        const followSpeed = document.getElementById('followSpeed');
+        const followSpeedVal = document.getElementById('followSpeedVal');
 
         let debounceTimer = null;
+
+        /* Track when a user last touched each slider so the status poll
+           does not overwrite the value while the user is still dragging. */
+        const _lastUserInput = {};  // element-id → timestamp
+        const USER_INPUT_GRACE_MS = 3000;
+        function markUserInput(el) { _lastUserInput[el.id] = Date.now(); }
+        function userRecentlyTouched(el) {
+            const t = _lastUserInput[el.id];
+            return t && (Date.now() - t) < USER_INPUT_GRACE_MS;
+        }
 
         function updateLabels() {
             panVal.textContent = String(pan.value);
@@ -159,6 +207,17 @@ INDEX_HTML = """<!doctype html>
                         invTiltChk.checked = (Number(j.tracking.tilt_sign) < 0);
                     }
                 }
+                if (j.follow) {
+                    setFollowUi(Boolean(j.follow.enabled));
+                    if (typeof j.follow.target_bbox_area === 'number' && !userRecentlyTouched(followDist)) {
+                        followDist.value = j.follow.target_bbox_area.toFixed(2);
+                        followDistVal.textContent = j.follow.target_bbox_area.toFixed(2);
+                    }
+                    if (typeof j.follow.max_linear === 'number' && !userRecentlyTouched(followSpeed)) {
+                        followSpeed.value = j.follow.max_linear.toFixed(2);
+                        followSpeedVal.textContent = j.follow.max_linear.toFixed(2);
+                    }
+                }
             } catch (e) {
                 statusEl.textContent = 'status error';
             }
@@ -193,10 +252,53 @@ INDEX_HTML = """<!doctype html>
             }
         }
 
+        function setFollowUi(enabled) {
+            followStateEl.textContent = enabled ? 'on' : 'off';
+            followBtn.textContent = enabled ? 'Disable auto follow' : 'Enable auto follow';
+        }
+
+        async function setFollow(enabled) {
+            try {
+                await fetch('/api/follow', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({enabled: Boolean(enabled)})
+                });
+            } catch (e) {
+                // ignore
+            }
+        }
+
         trackBtn.addEventListener('click', async () => {
             const enabled = (trackStateEl.textContent === 'on');
             await setTracking(!enabled);
             // status poll will reconcile actual state
+        });
+
+        followBtn.addEventListener('click', async () => {
+            const enabled = (followStateEl.textContent === 'on');
+            await setFollow(!enabled);
+        });
+
+        async function sendFollowConfig(targetArea, maxLinear) {
+            try {
+                await fetch('/api/follow/config', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({target_bbox_area: Number(targetArea), max_linear: Number(maxLinear)})
+                });
+            } catch (e) { /* ignore */ }
+        }
+
+        followDist.addEventListener('input', () => {
+            markUserInput(followDist);
+            followDistVal.textContent = Number(followDist.value).toFixed(2);
+            sendFollowConfig(followDist.value, followSpeed.value);
+        });
+        followSpeed.addEventListener('input', () => {
+            markUserInput(followSpeed);
+            followSpeedVal.textContent = Number(followSpeed.value).toFixed(2);
+            sendFollowConfig(followDist.value, followSpeed.value);
         });
 
         invPanChk.addEventListener('change', async () => {
@@ -204,6 +306,32 @@ INDEX_HTML = """<!doctype html>
         });
         invTiltChk.addEventListener('change', async () => {
             await setTrackingConfig(invPanChk.checked, invTiltChk.checked);
+        });
+
+        // ---- Snapshot ----
+        const snapBtn = document.getElementById('snapBtn');
+        const snapStatus = document.getElementById('snapStatus');
+        const snapHistory = document.getElementById('snapHistory');
+        snapBtn.addEventListener('click', async () => {
+            snapBtn.disabled = true;
+            snapStatus.textContent = 'Capturing…';
+            try {
+                const r = await fetch('/api/snapshot', {method: 'POST'});
+                if (!r.ok) { snapStatus.textContent = 'Error ' + r.status; return; }
+                const j = await r.json();
+                snapStatus.textContent = '✅ ' + j.filename;
+                const link = document.createElement('a');
+                link.href = '/api/snapshots/' + encodeURIComponent(j.filename);
+                link.target = '_blank';
+                link.textContent = j.filename;
+                const div = document.createElement('div');
+                div.appendChild(link);
+                snapHistory.prepend(div);
+            } catch (e) {
+                snapStatus.textContent = 'Failed';
+            } finally {
+                snapBtn.disabled = false;
+            }
         });
 
         function resizeOverlay() {
@@ -503,9 +631,10 @@ class WebVideoNode(Node):
         self.declare_parameter("tilt_min_deg", 0.0)
         self.declare_parameter("tilt_max_deg", 110.0)
         self.declare_parameter("pan_neutral_deg", 90.0)
-        self.declare_parameter("tilt_neutral_deg", 90.0)
+        self.declare_parameter("tilt_neutral_deg", 45.0)
 
         self.declare_parameter("cmd_vel_topic", "cmd_vel")
+        self.declare_parameter("snapshot_dir", "~/Pictures/raspbot")
         # Max speeds (scaled by incoming -1..1 commands from the web UI).
         self.declare_parameter("max_linear_mps", 0.25)
         self.declare_parameter("max_angular_rps", 1.2)
@@ -516,6 +645,9 @@ class WebVideoNode(Node):
         self.declare_parameter("detections_topic", "detections/json")
         self.declare_parameter("tracking_enable_topic", "tracking/enable")
         self.declare_parameter("tracking_config_topic", "tracking/config")
+        self.declare_parameter("follow_enable_topic", "follow/enable")
+        self.declare_parameter("follow_target_area_topic", "follow/target_area")
+        self.declare_parameter("follow_max_linear_topic", "follow/max_linear")
 
         self._frame_buffer = frame_buffer
         self._frame_count = 0
@@ -576,6 +708,19 @@ class WebVideoNode(Node):
         self.get_logger().info(
             f"Tracking config topic: {tracking_config_topic} (std_msgs/Int32MultiArray [pan_sign, tilt_sign])"
         )
+
+        follow_enable_topic = str(self.get_parameter("follow_enable_topic").value)
+        self._follow_enabled = False
+        self._follow_pub = self.create_publisher(Bool, follow_enable_topic, 10)
+        self.get_logger().info(f"Follow enable topic: {follow_enable_topic} (std_msgs/Bool)")
+
+        follow_target_area_topic = str(self.get_parameter("follow_target_area_topic").value)
+        self._follow_target_bbox_area = 0.04
+        self._follow_target_area_pub = self.create_publisher(Float64, follow_target_area_topic, 10)
+
+        follow_max_linear_topic = str(self.get_parameter("follow_max_linear_topic").value)
+        self._follow_max_linear = 0.30
+        self._follow_max_linear_pub = self.create_publisher(Float64, follow_max_linear_topic, 10)
 
     @staticmethod
     def _clamp(x: float, lo: float, hi: float) -> float:
@@ -697,6 +842,11 @@ class WebVideoNode(Node):
                 'pan_sign': int(self._tracking_pan_sign),
                 'tilt_sign': int(self._tracking_tilt_sign),
             },
+            'follow': {
+                'enabled': bool(self._follow_enabled),
+                'target_bbox_area': float(self._follow_target_bbox_area),
+                'max_linear': float(self._follow_max_linear),
+            },
         }
 
     def _on_detections(self, msg: String) -> None:
@@ -719,6 +869,49 @@ class WebVideoNode(Node):
         msg.data = bool(enabled)
         self._tracking_pub.publish(msg)
         self._tracking_enabled = bool(enabled)
+
+    def set_follow_enabled(self, enabled: bool) -> None:
+        msg = Bool()
+        msg.data = bool(enabled)
+        self._follow_pub.publish(msg)
+        self._follow_enabled = bool(enabled)
+
+    def set_follow_config(self, target_bbox_area: float = None, max_linear: float = None) -> None:
+        if target_bbox_area is not None:
+            val = max(0.01, min(1.0, float(target_bbox_area)))
+            self._follow_target_bbox_area = val
+            msg = Float64()
+            msg.data = val
+            self._follow_target_area_pub.publish(msg)
+        if max_linear is not None:
+            val = max(0.05, min(1.0, float(max_linear)))
+            self._follow_max_linear = val
+            msg = Float64()
+            msg.data = val
+            self._follow_max_linear_pub.publish(msg)
+
+    def take_snapshot(self) -> dict:
+        """Grab the latest full-resolution JPEG and save to disk. Returns {filename, path}."""
+        import os
+        from datetime import datetime
+
+        latest = self._frame_buffer.get_latest()
+        if latest.jpeg is None or len(latest.jpeg) == 0:
+            raise RuntimeError("No frame available")
+
+        snap_dir = str(self.get_parameter("snapshot_dir").value)
+        snap_dir = os.path.expanduser(snap_dir)
+        os.makedirs(snap_dir, exist_ok=True)
+
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]  # trim to milliseconds
+        filename = f"raspbot_{ts}.jpg"
+        filepath = os.path.join(snap_dir, filename)
+
+        with open(filepath, "wb") as f:
+            f.write(latest.jpeg)
+
+        self.get_logger().info(f"Snapshot saved: {filepath} ({len(latest.jpeg)} bytes)")
+        return {"filename": filename, "path": filepath, "size": len(latest.jpeg)}
 
     @staticmethod
     def _norm_sign(x: int) -> int:
@@ -752,6 +945,10 @@ def make_handler(
     cmd_vel_stopper=None,
     tracking_setter=None,
     tracking_config_setter=None,
+    follow_setter=None,
+    follow_config_setter=None,
+    snapshot_taker=None,
+    snapshot_dir=None,
 ):
     boundary = b"--frame"
     fps = max(float(fps_limit), 1.0)
@@ -845,6 +1042,34 @@ def make_handler(
                     return
                 self.send_response(HTTPStatus.NO_CONTENT)
                 self.end_headers()
+                return
+
+            if path.startswith("/api/snapshots/"):
+                import os
+                fname = path[len("/api/snapshots/"):]
+                # Sanitize: only allow simple filenames (no path traversal)
+                if not fname or '/' in fname or '..' in fname or '\\' in fname:
+                    self.send_response(HTTPStatus.BAD_REQUEST)
+                    self.end_headers()
+                    return
+                sdir = os.path.expanduser(snapshot_dir) if snapshot_dir else os.path.expanduser("~/Pictures/raspbot")
+                fpath = os.path.join(sdir, fname)
+                if not os.path.isfile(fpath):
+                    self.send_response(HTTPStatus.NOT_FOUND)
+                    self.end_headers()
+                    return
+                try:
+                    with open(fpath, "rb") as f:
+                        data = f.read()
+                    self.send_response(HTTPStatus.OK)
+                    self.send_header("Content-Type", "image/jpeg")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.send_header("Content-Disposition", f'inline; filename="{fname}"')
+                    self.end_headers()
+                    self.wfile.write(data)
+                except Exception:
+                    self.send_response(HTTPStatus.INTERNAL_SERVER_ERROR)
+                    self.end_headers()
                 return
 
             if path.startswith("/stream.mjpg"):
@@ -1052,6 +1277,81 @@ def make_handler(
                 self.end_headers()
                 return
 
+            if path == '/api/follow':
+                if not callable(follow_setter):
+                    self.send_response(HTTPStatus.NOT_IMPLEMENTED)
+                    self.end_headers()
+                    return
+
+                try:
+                    length = int(self.headers.get('Content-Length', '0'))
+                except Exception:
+                    length = 0
+                if length <= 0 or length > 8192:
+                    self.send_response(HTTPStatus.BAD_REQUEST)
+                    self.end_headers()
+                    return
+
+                raw = self.rfile.read(length)
+                try:
+                    payload = json.loads(raw.decode('utf-8'))
+                    enabled = bool(payload.get('enabled'))
+                except Exception:
+                    self.send_response(HTTPStatus.BAD_REQUEST)
+                    self.end_headers()
+                    return
+
+                try:
+                    follow_setter(enabled)
+                except Exception:
+                    self.send_response(HTTPStatus.INTERNAL_SERVER_ERROR)
+                    self.end_headers()
+                    return
+
+                self.send_response(HTTPStatus.NO_CONTENT)
+                self.end_headers()
+                return
+
+            if path == '/api/follow/config':
+                if not callable(follow_config_setter):
+                    self.send_response(HTTPStatus.NOT_IMPLEMENTED)
+                    self.end_headers()
+                    return
+
+                try:
+                    length = int(self.headers.get('Content-Length', '0'))
+                except Exception:
+                    length = 0
+                if length <= 0 or length > 8192:
+                    self.send_response(HTTPStatus.BAD_REQUEST)
+                    self.end_headers()
+                    return
+
+                raw = self.rfile.read(length)
+                try:
+                    payload = json.loads(raw.decode('utf-8'))
+                    target_area = payload.get('target_bbox_area')
+                    max_linear = payload.get('max_linear')
+                    if target_area is not None:
+                        target_area = float(target_area)
+                    if max_linear is not None:
+                        max_linear = float(max_linear)
+                except Exception:
+                    self.send_response(HTTPStatus.BAD_REQUEST)
+                    self.end_headers()
+                    return
+
+                try:
+                    follow_config_setter(target_area=target_area, max_linear=max_linear)
+                except Exception:
+                    self.send_response(HTTPStatus.INTERNAL_SERVER_ERROR)
+                    self.end_headers()
+                    return
+
+                self.send_response(HTTPStatus.NO_CONTENT)
+                self.end_headers()
+                return
+
             if path in {'/api/tracking/config', '/api/tracking_config'}:
                 if not callable(tracking_config_setter):
                     self.send_response(HTTPStatus.NOT_IMPLEMENTED)
@@ -1096,6 +1396,31 @@ def make_handler(
                 self.end_headers()
                 return
 
+            if path == '/api/snapshot':
+                if not callable(snapshot_taker):
+                    self.send_response(HTTPStatus.NOT_IMPLEMENTED)
+                    self.end_headers()
+                    return
+                try:
+                    result = snapshot_taker()
+                    body = json.dumps(result).encode('utf-8')
+                    self.send_response(HTTPStatus.OK)
+                    self.send_header('Content-Type', 'application/json; charset=utf-8')
+                    self.send_header('Content-Length', str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                except RuntimeError as e:
+                    body = json.dumps({'error': str(e)}).encode('utf-8')
+                    self.send_response(HTTPStatus.SERVICE_UNAVAILABLE)
+                    self.send_header('Content-Type', 'application/json; charset=utf-8')
+                    self.send_header('Content-Length', str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                except Exception:
+                    self.send_response(HTTPStatus.INTERNAL_SERVER_ERROR)
+                    self.end_headers()
+                return
+
             self.send_response(HTTPStatus.NOT_FOUND)
             self.send_header('Content-Type', 'text/plain; charset=utf-8')
             self.end_headers()
@@ -1131,6 +1456,10 @@ def main() -> None:
         cmd_vel_stopper=node.stop_cmd_vel,
         tracking_setter=node.set_tracking_enabled,
         tracking_config_setter=node.set_tracking_config,
+        follow_setter=node.set_follow_enabled,
+        follow_config_setter=node.set_follow_config,
+        snapshot_taker=node.take_snapshot,
+        snapshot_dir=str(node.get_parameter("snapshot_dir").value),
     )
     httpd = ThreadingHTTPServer((bind, port), handler_cls)
     # Allow the serve loop to wake up periodically so Ctrl-C / rclpy shutdown is responsive.
