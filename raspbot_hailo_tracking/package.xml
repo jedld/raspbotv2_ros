@@ -1,22 +1,22 @@
 <?xml version="1.0"?>
 <package format="3">
-  <name>raspbot_web_video</name>
+  <name>raspbot_hailo_tracking</name>
   <version>0.1.0</version>
-  <description>Minimal web (MJPEG) video streamer for Yahboom Raspbot V2 camera topics.</description>
+  <description>Hailo-8 object detection and simple person tracking for Raspbot (publishes detections JSON + gimbal commands).</description>
   <maintainer email="user@todo.todo">user</maintainer>
   <license>Apache-2.0</license>
 
-  <buildtool_depend>ament_python</buildtool_depend>
+  <buildtool_depend>ament_cmake</buildtool_depend>
 
-  <depend>rclpy</depend>
-  <depend>geometry_msgs</depend>
+  <depend>rclcpp</depend>
   <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
   <depend>std_msgs</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
 
   <export>
-    <build_type>ament_python</build_type>
+    <build_type>ament_cmake</build_type>
   </export>
 </package>

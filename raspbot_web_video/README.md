@@ -94,6 +94,26 @@ ros2 run raspbot_web_video web_video --ros-args \
 	-p max_linear_mps:=0.20 \
 	-p max_angular_rps:=1.00 \
 	-p cmd_timeout_sec:=0.5
+
+## Detection + person tracking
+
+If you run the Hailo detector/tracker node (see `raspbot_hailo_tracking`), the web UI can:
+
+- Draw bounding boxes (pulled from `detections_topic`, JSON on `std_msgs/String`)
+- Toggle person tracking (publishes `std_msgs/Bool` to `tracking_enable_topic`)
+
+Defaults:
+
+- `detections_topic`: `detections/json`
+- `tracking_enable_topic`: `tracking/enable`
+
+Override topics:
+
+```bash
+ros2 run raspbot_web_video web_video --ros-args \
+	-p detections_topic:=detections/json \
+	-p tracking_enable_topic:=tracking/enable
+```
 ```
 
 ## Notes

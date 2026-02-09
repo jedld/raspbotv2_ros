@@ -31,6 +31,9 @@ Optional flags:
 - Disable GPIO sensors: `enable_gpio_sensors:=false`
 - Disable startup sound: `play_startup_sound:=false`
 - Disable OLED: `enable_oled:=false`
+- Enable web camera UI: `enable_web_video:=true`
+- Enable Hailo detection/tracking: `enable_hailo:=true hailo_hef_path:=/path/to/model.hef`
+	- Optional labels: `hailo_labels_path:=~/.local/share/raspbot/models/hailo8/coco80.labels`
 
 ## OLED screen
 
@@ -60,9 +63,28 @@ If you enabled the camera (`enable_camera:=true`), you can view the feed in a br
 - Run: `ros2 run raspbot_web_video web_video`
 - Open: `http://<robot-ip>:8080/`
 
+You can also run it directly from bringup:
+
+- `ros2 launch raspbot_bringup bringup.launch.py enable_camera:=true enable_web_video:=true`
+
 By default it subscribes to `image_raw/compressed` (JPEG). If your camera topic differs:
 
 - `ros2 run raspbot_web_video web_video --ros-args -p topic:=/image_raw/compressed`
+
+## Hailo-8 object detection + person tracking
+
+If you have a Hailo HEF model on the robot, you can start the detector node from bringup. It publishes detection JSON for the web UI overlay and listens for a tracking enable toggle.
+
+To download a known-good open-source COCO detector (pre-compiled HEF for Hailo-8) into `~/.local/share/raspbot/models/hailo8`:
+
+- `ros2 run raspbot_hailo_tracking download_hailo_model --model yolox_s_leaky`
+
+- Start everything: `ros2 launch raspbot_bringup bringup.launch.py enable_camera:=true enable_web_video:=true enable_hailo:=true hailo_hef_path:=/path/to/model.hef hailo_labels_path:=~/.local/share/raspbot/models/hailo8/coco80.labels`
+
+If tracking moves the camera the wrong direction, flip the signs (common when the gimbal axes are wired opposite or the camera is mounted mirrored):
+
+- Flip pan: `hailo_pan_sign:=-1`
+- Flip tilt: `hailo_tilt_sign:=-1`
 
 ## Topics
 

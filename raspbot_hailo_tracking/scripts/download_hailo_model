@@ -1,0 +1,208 @@
+#!/usr/bin/env python3
+
+import argparse
+import os
+from pathlib import Path
+import sys
+import urllib.request
+
+
+# Pick a lightweight COCO detector that includes the "person" class.
+# These are pre-compiled HEF files published by the Hailo Model Zoo.
+# Note: Hailo Model Zoo code is MIT-licensed, but the underlying model(s) come
+# from upstream projects with their own licenses. The default here prefers
+# permissive licenses (Apache-2.0).
+# Source list: https://github.com/hailo-ai/hailo_model_zoo/blob/master/docs/public_models/HAILO8/HAILO8_object_detection.rst
+
+_COMPILED_VERSION = "v2.17.0"
+_BASE = f"https://hailo-model-zoo.s3.eu-west-2.amazonaws.com/ModelZoo/Compiled/{_COMPILED_VERSION}/hailo8"
+
+MODEL_URLS = {
+    # YOLOX (Apache-2.0): good default tradeoff for tracking + boxes.
+    # Upstream: https://github.com/Megvii-BaseDetection/YOLOX
+    "yolox_s_leaky": f"{_BASE}/yolox_s_leaky.hef",
+    "yolox_tiny": f"{_BASE}/yolox_tiny.hef",
+
+    # SSD MobileNet (Apache-2.0): very fast, lower accuracy.
+    # Upstream: https://github.com/tensorflow/models
+    "ssd_mobilenet_v1": f"{_BASE}/ssd_mobilenet_v1.hef",
+    "ssd_mobilenet_v2": f"{_BASE}/ssd_mobilenet_v2.hef",
+}
+
+
+# Standard COCO 80-class labels, newline-delimited.
+# (Used for UI labeling and auto-detecting class_id for "person".)
+COCO80_LABELS = """person
+bicycle
+car
+motorcycle
+airplane
+bus
+train
+truck
+boat
+traffic light
+fire hydrant
+stop sign
+parking meter
+bench
+bird
+cat
+dog
+horse
+sheep
+cow
+elephant
+bear
+zebra
+giraffe
+backpack
+umbrella
+handbag
+tie
+suitcase
+frisbee
+skis
+snowboard
+sports ball
+kite
+baseball bat
+baseball glove
+skateboard
+surfboard
+tennis racket
+bottle
+wine glass
+cup
+fork
+knife
+spoon
+bowl
+banana
+apple
+sandwich
+orange
+broccoli
+carrot
+hot dog
+pizza
+donut
+cake
+chair
+couch
+potted plant
+bed
+dining table
+toilet
+tv
+laptop
+mouse
+remote
+keyboard
+cell phone
+microwave
+oven
+toaster
+sink
+refrigerator
+book
+clock
+vase
+scissors
+teddy bear
+hair drier
+toothbrush
+"""
+
+
+def _default_base_dir() -> Path:
+    xdg = os.environ.get("XDG_DATA_HOME")
+    if xdg:
+        return Path(xdg)
+    return Path.home() / ".local" / "share"
+
+
+def _download(url: str, dst: Path, *, force: bool) -> None:
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if dst.exists() and not force:
+        print(f"Already exists: {dst}")
+        return
+
+    tmp = dst.with_suffix(dst.suffix + ".partial")
+    if tmp.exists():
+        tmp.unlink()
+
+    print(f"Downloading:\n  {url}\n→ {dst}")
+
+    def reporthook(blocknum: int, blocksize: int, totalsize: int) -> None:
+        if totalsize <= 0:
+            return
+        downloaded = min(blocknum * blocksize, totalsize)
+        pct = 100.0 * downloaded / totalsize
+        mb = downloaded / (1024 * 1024)
+        total_mb = totalsize / (1024 * 1024)
+        sys.stdout.write(f"\r  {pct:5.1f}%  {mb:7.2f}/{total_mb:7.2f} MiB")
+        sys.stdout.flush()
+
+    try:
+        urllib.request.urlretrieve(url, tmp, reporthook=reporthook)
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+        tmp.replace(dst)
+    finally:
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Download a pre-compiled Hailo-8 object detection HEF (open-source COCO detector) "
+            "to a standard local models directory."
+        )
+    )
+    parser.add_argument(
+        "--model",
+        default="yolox_s_leaky",
+        choices=sorted(MODEL_URLS.keys()),
+        help="Which detector to download (default: yolox_s_leaky).",
+    )
+    parser.add_argument(
+        "--dest-dir",
+        default=str(_default_base_dir() / "raspbot" / "models" / "hailo8"),
+        help="Directory to store downloaded models (default: XDG_DATA_HOME/raspbot/models/hailo8).",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-download even if the file already exists.",
+    )
+    args = parser.parse_args()
+
+    dest_dir = Path(args.dest_dir).expanduser().resolve()
+    model = args.model
+    url = MODEL_URLS[model]
+
+    hef_path = dest_dir / f"{model}.hef"
+    labels_path = dest_dir / "coco80.labels"
+
+    _download(url, hef_path, force=args.force)
+
+    # Write labels (small text file) for convenience.
+    if (not labels_path.exists()) or args.force:
+        labels_path.parent.mkdir(parents=True, exist_ok=True)
+        labels_path.write_text(COCO80_LABELS, encoding="utf-8")
+
+    print("\nDone.")
+    print(f"hef_path: {hef_path}")
+    print(f"labels_path: {labels_path}")
+    print("\nExample:")
+    print(
+        "  ros2 launch raspbot_hailo_tracking hailo_tracking.launch.py "
+        f"hef_path:={hef_path} labels_path:={labels_path}"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

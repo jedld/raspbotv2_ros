@@ -13,6 +13,7 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from geometry_msgs.msg import Vector3, Twist
 from sensor_msgs.msg import CompressedImage
+from std_msgs.msg import Bool, String, Int32MultiArray
 
 
 INDEX_HTML = """<!doctype html>
@@ -24,7 +25,9 @@ INDEX_HTML = """<!doctype html>
   <style>
     body { font-family: system-ui, sans-serif; margin: 16px; }
     .wrap { max-width: 960px; margin: 0 auto; }
-    img { width: 100%; height: auto; background: #111; border-radius: 8px; }
+        .videoWrap { position: relative; width: 100%; }
+        img { width: 100%; height: auto; background: #111; border-radius: 8px; display: block; }
+        canvas.overlay { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; }
     code { background: #f2f2f2; padding: 2px 6px; border-radius: 4px; }
     .muted { color: #666; }
         .card { border: 1px solid #e6e6e6; border-radius: 10px; padding: 12px; margin-top: 12px; }
@@ -33,6 +36,10 @@ INDEX_HTML = """<!doctype html>
         input[type=range] { width: 100%; }
         button { padding: 8px 12px; border-radius: 8px; border: 1px solid #ccc; background: #fafafa; cursor: pointer; }
         button:hover { background: #f0f0f0; }
+                button.primary { background: #111; color: #fff; border-color: #111; }
+                button.primary:hover { background: #222; }
+                button.danger { background: #b00020; color: #fff; border-color: #b00020; }
+                button.danger:hover { background: #8f001a; }
         .kv { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 12px; }
   </style>
 </head>
@@ -40,7 +47,10 @@ INDEX_HTML = """<!doctype html>
   <div class=\"wrap\">
     <h1>Raspbot Camera</h1>
     <p class=\"muted\">Streaming MJPEG from ROS 2 <code>sensor_msgs/CompressedImage</code>.</p>
-    <img src=\"/stream.mjpg\" alt=\"camera stream\" />
+        <div class=\"videoWrap\" id=\"videoWrap\">
+            <img id=\"video\" src=\"/stream.mjpg\" alt=\"camera stream\" />
+            <canvas id=\"overlay\" class=\"overlay\"></canvas>
+        </div>
 
         <div class=\"card\">
             <h2>Gimbal</h2>
@@ -68,12 +78,27 @@ INDEX_HTML = """<!doctype html>
             <h2>Drive (WASD)</h2>
             <p class=\"muted\">Keyboard teleop publishes to <code>cmd_vel</code>. Click this page once so it has focus.</p>
             <div class=\"row\">
-                <button id=\"stopBtn\" title=\"Immediately publish zero cmd_vel\">STOP</button>
+                <button class=\"danger\" id=\"stopBtn\" title=\"Immediately publish zero cmd_vel\">STOP</button>
                 <div class=\"kv\">Keys: <code>W</code>=forward, <code>S</code>=reverse, <code>A</code>=turn left, <code>D</code>=turn right. Hold <code>Shift</code> for faster.</div>
             </div>
             <div class=\"row\" style=\"margin-top: 8px;\">
                 <div class=\"kv\">cmd_vel: <span id=\"cmdVel\">0, 0</span></div>
                 <div class=\"kv\">Safety: auto-stop on keyup / tab switch.</div>
+            </div>
+        </div>
+
+        <div class=\"card\">
+            <h2>Detection / Tracking</h2>
+            <p class=\"muted\">Shows bounding boxes from <code>detections/json</code> and can enable person tracking via <code>tracking/enable</code>.</p>
+            <div class=\"row\">
+                <button class=\"primary\" id=\"trackBtn\">Enable person tracking</button>
+                <label class=\"kv\"><input id=\"boxesChk\" type=\"checkbox\" checked /> Show boxes</label>
+                <label class=\"kv\"><input id=\"invPanChk\" type=\"checkbox\" checked /> Invert pan</label>
+                <label class=\"kv\"><input id=\"invTiltChk\" type=\"checkbox\" checked /> Invert tilt</label>
+                <div class=\"kv\">Tracking: <span id=\"trackState\">off</span></div>
+            </div>
+            <div class=\"row\" style=\"margin-top: 8px;\">
+                <div class=\"kv\">Detections: <span id=\"detState\">n/a</span></div>
             </div>
         </div>
   </div>
@@ -88,6 +113,14 @@ INDEX_HTML = """<!doctype html>
         const centerBtn = document.getElementById('centerBtn');
         const stopBtn = document.getElementById('stopBtn');
         const cmdVelEl = document.getElementById('cmdVel');
+        const video = document.getElementById('video');
+        const overlay = document.getElementById('overlay');
+        const trackBtn = document.getElementById('trackBtn');
+        const trackStateEl = document.getElementById('trackState');
+        const detStateEl = document.getElementById('detState');
+        const boxesChk = document.getElementById('boxesChk');
+        const invPanChk = document.getElementById('invPanChk');
+        const invTiltChk = document.getElementById('invTiltChk');
 
         let debounceTimer = null;
 
@@ -114,9 +147,147 @@ INDEX_HTML = """<!doctype html>
                     }
                 }
                 statusEl.textContent = `frames=${j.frame_count ?? '?'} last_frame_age_s=${j.last_frame_age_s ?? 'null'}`;
+                if (j.tracking) {
+                    const enabled = Boolean(j.tracking.enabled);
+                    setTrackingUi(enabled);
+
+                    // Optional runtime tuning
+                    if (typeof j.tracking.pan_sign === 'number') {
+                        invPanChk.checked = (Number(j.tracking.pan_sign) < 0);
+                    }
+                    if (typeof j.tracking.tilt_sign === 'number') {
+                        invTiltChk.checked = (Number(j.tracking.tilt_sign) < 0);
+                    }
+                }
             } catch (e) {
                 statusEl.textContent = 'status error';
             }
+        }
+
+        function setTrackingUi(enabled) {
+            trackStateEl.textContent = enabled ? 'on' : 'off';
+            trackBtn.textContent = enabled ? 'Disable person tracking' : 'Enable person tracking';
+        }
+
+        async function setTracking(enabled) {
+            try {
+                await fetch('/api/tracking', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({enabled: Boolean(enabled)})
+                });
+            } catch (e) {
+                // ignore
+            }
+        }
+
+        async function setTrackingConfig(invertPan, invertTilt) {
+            try {
+                await fetch('/api/tracking/config', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({invert_pan: Boolean(invertPan), invert_tilt: Boolean(invertTilt)})
+                });
+            } catch (e) {
+                // ignore
+            }
+        }
+
+        trackBtn.addEventListener('click', async () => {
+            const enabled = (trackStateEl.textContent === 'on');
+            await setTracking(!enabled);
+            // status poll will reconcile actual state
+        });
+
+        invPanChk.addEventListener('change', async () => {
+            await setTrackingConfig(invPanChk.checked, invTiltChk.checked);
+        });
+        invTiltChk.addEventListener('change', async () => {
+            await setTrackingConfig(invPanChk.checked, invTiltChk.checked);
+        });
+
+        function resizeOverlay() {
+            const w = Math.max(1, Math.floor(video.clientWidth));
+            const h = Math.max(1, Math.floor(video.clientHeight));
+            if (overlay.width !== w) overlay.width = w;
+            if (overlay.height !== h) overlay.height = h;
+        }
+
+        window.addEventListener('resize', resizeOverlay);
+        video.addEventListener('load', resizeOverlay);
+
+        let latestDet = null;
+        let lastDetFetchMs = 0;
+
+        async function fetchDetections() {
+            try {
+                const r = await fetch('/detections', {cache: 'no-store'});
+                const j = await r.json();
+                latestDet = j;
+                lastDetFetchMs = Date.now();
+                const n = Array.isArray(j.detections) ? j.detections.length : 0;
+                detStateEl.textContent = `n=${n}`;
+            } catch (e) {
+                // Keep last detections; just show stale
+                detStateEl.textContent = 'error';
+            }
+        }
+
+        function drawOverlay() {
+            resizeOverlay();
+            const ctx = overlay.getContext('2d');
+            if (!ctx) return;
+            ctx.clearRect(0, 0, overlay.width, overlay.height);
+
+            if (!boxesChk.checked) {
+                requestAnimationFrame(drawOverlay);
+                return;
+            }
+
+            const j = latestDet;
+            if (!j || !Array.isArray(j.detections) || !j.image_width || !j.image_height) {
+                requestAnimationFrame(drawOverlay);
+                return;
+            }
+
+            const sx = overlay.width / Number(j.image_width);
+            const sy = overlay.height / Number(j.image_height);
+
+            ctx.lineWidth = 2;
+            ctx.font = '12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
+            ctx.textBaseline = 'top';
+
+            for (const d of j.detections) {
+                const x = Number(d.x) * sx;
+                const y = Number(d.y) * sy;
+                const w = Number(d.w) * sx;
+                const h = Number(d.h) * sy;
+                if (!Number.isFinite(x+y+w+h)) continue;
+
+                ctx.strokeStyle = '#00ff66';
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+                ctx.strokeRect(x, y, w, h);
+
+                const label = String(d.label ?? d.class_id ?? '?');
+                const score = Number(d.score);
+                const text = Number.isFinite(score) ? `${label} ${(score*100).toFixed(0)}%` : label;
+                const tw = ctx.measureText(text).width + 6;
+                const th = 14;
+                ctx.fillRect(x, Math.max(0, y - th), tw, th);
+                ctx.fillStyle = '#ffffff';
+                ctx.fillText(text, x + 3, Math.max(0, y - th) + 1);
+            }
+
+            // Stale indicator
+            const ageMs = Date.now() - lastDetFetchMs;
+            if (ageMs > 1000) {
+                ctx.fillStyle = 'rgba(255, 165, 0, 0.75)';
+                ctx.fillRect(0, 0, 140, 16);
+                ctx.fillStyle = '#000';
+                ctx.fillText(`detections stale`, 4, 2);
+            }
+
+            requestAnimationFrame(drawOverlay);
         }
 
         async function sendGimbal(p, t) {
@@ -276,6 +447,9 @@ INDEX_HTML = """<!doctype html>
         updateLabels();
         fetchStatus();
         setInterval(fetchStatus, 1000);
+        fetchDetections();
+        setInterval(fetchDetections, 200);
+        drawOverlay();
     </script>
 </body>
 </html>
@@ -338,6 +512,11 @@ class WebVideoNode(Node):
         # If no cmd_vel received for this duration, publish a stop once.
         self.declare_parameter("cmd_timeout_sec", 0.5)
 
+        # Detection/Tracking integration
+        self.declare_parameter("detections_topic", "detections/json")
+        self.declare_parameter("tracking_enable_topic", "tracking/enable")
+        self.declare_parameter("tracking_config_topic", "tracking/config")
+
         self._frame_buffer = frame_buffer
         self._frame_count = 0
         self._last_frame_monotonic = 0.0
@@ -378,6 +557,25 @@ class WebVideoNode(Node):
         )
         # Watchdog to stop if browser disconnects / stops sending.
         self._cmd_timer = self.create_timer(0.1, self._cmd_watchdog)
+
+        detections_topic = str(self.get_parameter("detections_topic").value)
+        self._latest_detections_json = None
+        self._last_detections_monotonic = 0.0
+        self._detections_sub = self.create_subscription(String, detections_topic, self._on_detections, 10)
+        self.get_logger().info(f"Detections topic: {detections_topic} (std_msgs/String JSON)")
+
+        tracking_enable_topic = str(self.get_parameter("tracking_enable_topic").value)
+        self._tracking_enabled = False
+        self._tracking_pub = self.create_publisher(Bool, tracking_enable_topic, 10)
+        self.get_logger().info(f"Tracking enable topic: {tracking_enable_topic} (std_msgs/Bool)")
+
+        tracking_config_topic = str(self.get_parameter("tracking_config_topic").value)
+        self._tracking_pan_sign = -1
+        self._tracking_tilt_sign = -1
+        self._tracking_config_pub = self.create_publisher(Int32MultiArray, tracking_config_topic, 10)
+        self.get_logger().info(
+            f"Tracking config topic: {tracking_config_topic} (std_msgs/Int32MultiArray [pan_sign, tilt_sign])"
+        )
 
     @staticmethod
     def _clamp(x: float, lo: float, hi: float) -> float:
@@ -491,7 +689,54 @@ class WebVideoNode(Node):
                     'last_cmd_age_s': (None if self._last_gimbal_monotonic <= 0.0 else max(0.0, now - self._last_gimbal_monotonic)),
                 },
             },
+            'detections': {
+                'last_age_s': (None if self._last_detections_monotonic <= 0.0 else max(0.0, now - self._last_detections_monotonic)),
+            },
+            'tracking': {
+                'enabled': bool(self._tracking_enabled),
+                'pan_sign': int(self._tracking_pan_sign),
+                'tilt_sign': int(self._tracking_tilt_sign),
+            },
         }
+
+    def _on_detections(self, msg: String) -> None:
+        if not msg.data:
+            return
+        self._latest_detections_json = msg.data
+        self._last_detections_monotonic = time.monotonic()
+
+    def get_latest_detections(self) -> dict:
+        # Always return valid JSON.
+        if not self._latest_detections_json:
+            return {"image_width": None, "image_height": None, "detections": []}
+        try:
+            return json.loads(self._latest_detections_json)
+        except Exception:
+            return {"error": "invalid_detections_json", "detections": []}
+
+    def set_tracking_enabled(self, enabled: bool) -> None:
+        msg = Bool()
+        msg.data = bool(enabled)
+        self._tracking_pub.publish(msg)
+        self._tracking_enabled = bool(enabled)
+
+    @staticmethod
+    def _norm_sign(x: int) -> int:
+        try:
+            v = int(x)
+        except Exception:
+            v = 1
+        return -1 if v < 0 else 1
+
+    def set_tracking_config(self, pan_sign: Optional[int] = None, tilt_sign: Optional[int] = None) -> None:
+        if pan_sign is not None:
+            self._tracking_pan_sign = self._norm_sign(pan_sign)
+        if tilt_sign is not None:
+            self._tracking_tilt_sign = self._norm_sign(tilt_sign)
+
+        msg = Int32MultiArray()
+        msg.data = [int(self._tracking_pan_sign), int(self._tracking_tilt_sign)]
+        self._tracking_config_pub.publish(msg)
 
 
 def make_handler(
@@ -500,10 +745,13 @@ def make_handler(
     fps_limit: float,
     logger,
     status_provider=None,
+    detections_provider=None,
     gimbal_setter=None,
     gimbal_center=None,
     cmd_vel_setter=None,
     cmd_vel_stopper=None,
+    tracking_setter=None,
+    tracking_config_setter=None,
 ):
     boundary = b"--frame"
     fps = max(float(fps_limit), 1.0)
@@ -543,6 +791,25 @@ def make_handler(
                     except Exception:
                         payload = {'error': 'status_provider_failed'}
                 body = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                try:
+                    self.wfile.flush()
+                except Exception:
+                    pass
+                return
+
+            if path.startswith("/detections"):
+                payload = {"detections": []}
+                if callable(detections_provider):
+                    try:
+                        payload = detections_provider()
+                    except Exception:
+                        payload = {'error': 'detections_provider_failed', 'detections': []}
+                body = (json.dumps(payload) + "\n").encode("utf-8")
                 self.send_response(HTTPStatus.OK)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
@@ -750,6 +1017,85 @@ def make_handler(
                 self.end_headers()
                 return
 
+            if path == '/api/tracking':
+                if not callable(tracking_setter):
+                    self.send_response(HTTPStatus.NOT_IMPLEMENTED)
+                    self.end_headers()
+                    return
+
+                try:
+                    length = int(self.headers.get('Content-Length', '0'))
+                except Exception:
+                    length = 0
+                if length <= 0 or length > 8192:
+                    self.send_response(HTTPStatus.BAD_REQUEST)
+                    self.end_headers()
+                    return
+
+                raw = self.rfile.read(length)
+                try:
+                    payload = json.loads(raw.decode('utf-8'))
+                    enabled = bool(payload.get('enabled'))
+                except Exception:
+                    self.send_response(HTTPStatus.BAD_REQUEST)
+                    self.end_headers()
+                    return
+
+                try:
+                    tracking_setter(enabled)
+                except Exception:
+                    self.send_response(HTTPStatus.INTERNAL_SERVER_ERROR)
+                    self.end_headers()
+                    return
+
+                self.send_response(HTTPStatus.NO_CONTENT)
+                self.end_headers()
+                return
+
+            if path in {'/api/tracking/config', '/api/tracking_config'}:
+                if not callable(tracking_config_setter):
+                    self.send_response(HTTPStatus.NOT_IMPLEMENTED)
+                    self.end_headers()
+                    return
+
+                try:
+                    length = int(self.headers.get('Content-Length', '0'))
+                except Exception:
+                    length = 0
+                if length <= 0 or length > 8192:
+                    self.send_response(HTTPStatus.BAD_REQUEST)
+                    self.end_headers()
+                    return
+
+                raw = self.rfile.read(length)
+                try:
+                    payload = json.loads(raw.decode('utf-8'))
+
+                    # Preferred UI format: invert toggles
+                    if 'invert_pan' in payload or 'invert_tilt' in payload:
+                        inv_pan = bool(payload.get('invert_pan', False))
+                        inv_tilt = bool(payload.get('invert_tilt', False))
+                        pan_sign = -1 if inv_pan else 1
+                        tilt_sign = -1 if inv_tilt else 1
+                    else:
+                        pan_sign = payload.get('pan_sign', None)
+                        tilt_sign = payload.get('tilt_sign', None)
+                except Exception:
+                    self.send_response(HTTPStatus.BAD_REQUEST)
+                    self.end_headers()
+                    return
+
+                try:
+                    tracking_config_setter(pan_sign, tilt_sign)
+                except Exception:
+                    self.send_response(HTTPStatus.INTERNAL_SERVER_ERROR)
+                    self.end_headers()
+                    return
+
+                self.send_response(HTTPStatus.NO_CONTENT)
+                self.end_headers()
+                return
+
             self.send_response(HTTPStatus.NOT_FOUND)
             self.send_header('Content-Type', 'text/plain; charset=utf-8')
             self.end_headers()
@@ -778,10 +1124,13 @@ def main() -> None:
         fps_limit=fps_limit,
         logger=node.get_logger(),
         status_provider=node.status_dict,
+        detections_provider=node.get_latest_detections,
         gimbal_setter=node.set_gimbal,
         gimbal_center=node.center_gimbal,
         cmd_vel_setter=node.set_cmd_vel,
         cmd_vel_stopper=node.stop_cmd_vel,
+        tracking_setter=node.set_tracking_enabled,
+        tracking_config_setter=node.set_tracking_config,
     )
     httpd = ThreadingHTTPServer((bind, port), handler_cls)
     # Allow the serve loop to wake up periodically so Ctrl-C / rclpy shutdown is responsive.
