@@ -30,6 +30,7 @@ setup(
             'lightbar = raspbot_hw.lightbar_node:main',
             'imu_serial = raspbot_hw.imu_serial_node:main',
             'oled = raspbot_hw.oled_node:main',
+            'pi_camera = raspbot_hw.pi_camera_node:main',
         ],
     },
 )

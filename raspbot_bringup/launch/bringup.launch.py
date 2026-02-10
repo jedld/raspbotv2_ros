@@ -19,6 +19,7 @@ def generate_launch_description():
     enable_lightbar = LaunchConfiguration('enable_lightbar')
     enable_oled = LaunchConfiguration('enable_oled')
     enable_imu = LaunchConfiguration('enable_imu')
+    enable_front_camera = LaunchConfiguration('enable_front_camera')
     play_startup_sound = LaunchConfiguration('play_startup_sound')
     enable_web_video = LaunchConfiguration('enable_web_video')
     enable_hailo = LaunchConfiguration('enable_hailo')
@@ -63,6 +64,7 @@ def generate_launch_description():
         DeclareLaunchArgument('enable_lightbar', default_value='true'),
         DeclareLaunchArgument('enable_oled', default_value='true'),
         DeclareLaunchArgument('enable_imu', default_value='true'),
+        DeclareLaunchArgument('enable_front_camera', default_value='true'),
         DeclareLaunchArgument('play_startup_sound', default_value='true'),
         DeclareLaunchArgument('enable_web_video', default_value='true'),
         DeclareLaunchArgument('enable_hailo', default_value='true'),
@@ -87,6 +89,7 @@ def generate_launch_description():
                 'enable_lightbar': enable_lightbar,
                 'enable_oled': enable_oled,
                 'enable_imu': enable_imu,
+                'enable_front_camera': enable_front_camera,
                 'params_file': params_file,
             }.items(),
         ),

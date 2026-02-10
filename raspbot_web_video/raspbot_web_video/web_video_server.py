@@ -153,6 +153,17 @@ INDEX_HTML = """<!doctype html>
             <div id=\"snapHistory\" style=\"margin-top:8px; font-size:12px;\"></div>
         </div>
 
+        <div class=\"card\" id=\"frontCamCard\">
+            <h2>&#128247; Front Camera</h2>
+            <p class=\"muted\">Pi Camera Module 3 (fixed, front-facing) — for navigation &amp; depth. Publishes on <code>front_camera/compressed</code>.</p>
+            <div style=\"position:relative;width:100%;max-width:640px;\">
+                <img id=\"frontVideo\" src=\"/stream_front.mjpg\" alt=\"front camera stream\" style=\"width:100%;height:auto;background:#111;border-radius:8px;display:block;\" />
+            </div>
+            <div class=\"row\" style=\"margin-top:6px;\">
+                <div class=\"kv\">Front cam: <span id=\"frontCamStatus\">loading…</span></div>
+            </div>
+        </div>
+
         <div class=\"card\" id=\"imuCard\">
             <h2>&#129517; IMU &amp; Orientation</h2>
             <p class=\"muted\">Live 6-axis IMU data from Arduino Nano RP2040 Connect. Publishes on <code>imu/data</code>.</p>
@@ -562,12 +573,12 @@ INDEX_HTML = """<!doctype html>
             }
         }
 
-        async function sendCmdVel(lin, ang) {
+        async function sendCmdVel(lin, lat, ang) {
             try {
                 await fetch('/api/cmd_vel', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({linear_x: Number(lin), angular_z: Number(ang)})
+                    body: JSON.stringify({linear_x: Number(lin), linear_y: Number(lat || 0), angular_z: Number(ang)})
                 });
             } catch (e) {
                 // ignore
@@ -639,27 +650,29 @@ INDEX_HTML = """<!doctype html>
             const fast = pressed.has('shift');
             // These are multipliers; actual limits are enforced server-side.
             const linMag = fast ? 1.0 : 0.5;
+            const latMag = fast ? 1.0 : 0.5;
             const angMag = fast ? 1.0 : 0.6;
 
             let lin = 0;
+            let lat = 0;
             let ang = 0;
             if (pressed.has('w')) lin += linMag;
             if (pressed.has('s')) lin -= linMag;
-            if (pressed.has('a')) ang += angMag;
-            if (pressed.has('d')) ang -= angMag;
-            return {lin, ang};
+            if (pressed.has('a')) lat += latMag;  // strafe left (ROS +Y = left)
+            if (pressed.has('d')) lat -= latMag;  // strafe right
+            if (pressed.has('q')) ang += angMag;  // rotate left
+            if (pressed.has('e')) ang -= angMag;  // rotate right
+            return {lin, lat, ang};
         }
 
         function startDriveLoop() {
             if (driveTimer) return;
             driveTimer = setInterval(async () => {
-                const {lin, ang} = computeDrive();
-                if (lin !== lastLin || ang !== lastAng) {
-                    lastLin = lin;
-                    lastAng = ang;
-                }
-                cmdVelEl.textContent = `${lin.toFixed(2)}, ${ang.toFixed(2)}`;
-                await sendCmdVel(lin, ang);
+                const {lin, lat, ang} = computeDrive();
+                lastLin = lin;
+                lastAng = ang;
+                cmdVelEl.textContent = `${lin.toFixed(2)}, ${lat.toFixed(2)}, ${ang.toFixed(2)}`;
+                await sendCmdVel(lin, lat, ang);
             }, 100);
         }
 
@@ -671,7 +684,7 @@ INDEX_HTML = """<!doctype html>
             pressed.clear();
             lastLin = 0;
             lastAng = 0;
-            cmdVelEl.textContent = `0.00, 0.00`;
+            cmdVelEl.textContent = `0.00, 0.00, 0.00`;
             stopCmdVel();
         }
 
@@ -682,7 +695,7 @@ INDEX_HTML = """<!doctype html>
 
         document.addEventListener('keydown', (ev) => {
             const k = normalizeKey(ev);
-            if (!['w','a','s','d','shift'].includes(k)) return;
+            if (!['w','a','s','d','q','e','shift'].includes(k)) return;
             // prevent browser from scrolling on space etc; WASD doesn't scroll but keep consistent.
             ev.preventDefault();
             pressed.add(k);
@@ -691,7 +704,7 @@ INDEX_HTML = """<!doctype html>
 
         document.addEventListener('keyup', (ev) => {
             const k = normalizeKey(ev);
-            if (!['w','a','s','d','shift'].includes(k)) return;
+            if (!['w','a','s','d','q','e','shift'].includes(k)) return;
             ev.preventDefault();
             pressed.delete(k);
             if (pressed.size === 0) {
@@ -964,6 +977,22 @@ INDEX_HTML = """<!doctype html>
         // Poll IMU at ~10 Hz
         fetchImu();
         setInterval(fetchImu, 100);
+
+        // Front camera status
+        const frontCamStatus = document.getElementById('frontCamStatus');
+        const frontVideo = document.getElementById('frontVideo');
+        let frontCamOk = false;
+        frontVideo.addEventListener('load', () => { frontCamOk = true; frontCamStatus.textContent = 'streaming'; });
+        frontVideo.addEventListener('error', () => { frontCamOk = false; frontCamStatus.textContent = 'no stream'; });
+        setInterval(() => {
+            if (frontCamOk) {
+                frontCamStatus.textContent = 'streaming';
+                frontCamStatus.style.color = '#080';
+            } else {
+                frontCamStatus.textContent = 'no stream';
+                frontCamStatus.style.color = '#b00';
+            }
+        }, 2000);
     </script>
 </body>
 </html>
@@ -1003,10 +1032,11 @@ class FrameBuffer:
 
 
 class WebVideoNode(Node):
-    def __init__(self, frame_buffer: FrameBuffer) -> None:
+    def __init__(self, frame_buffer: FrameBuffer, front_frame_buffer: FrameBuffer = None) -> None:
         super().__init__("web_video")
 
         self.declare_parameter("topic", "image_raw/compressed")
+        self.declare_parameter("front_camera_topic", "front_camera/compressed")
         self.declare_parameter("bind", "0.0.0.0")
         self.declare_parameter("port", 8080)
         self.declare_parameter("fps_limit", 15.0)
@@ -1037,7 +1067,9 @@ class WebVideoNode(Node):
         self.declare_parameter("lightbar_command_topic", "lightbar/command")
 
         self._frame_buffer = frame_buffer
+        self._front_frame_buffer = front_frame_buffer
         self._frame_count = 0
+        self._front_frame_count = 0
         self._last_frame_monotonic = 0.0
 
         self._pan_min = float(self.get_parameter("pan_min_deg").value)
@@ -1057,6 +1089,7 @@ class WebVideoNode(Node):
         self._cmd_last_rx_monotonic = 0.0
         self._cmd_last_sent_monotonic = 0.0
         self._cmd_linear_x = 0.0
+        self._cmd_linear_y = 0.0
         self._cmd_angular_z = 0.0
 
         topic = str(self.get_parameter("topic").value)
@@ -1064,6 +1097,16 @@ class WebVideoNode(Node):
 
         # Use sensor-data QoS for better interoperability with camera publishers.
         self._sub = self.create_subscription(CompressedImage, topic, self._on_img, qos_profile_sensor_data)
+
+        # Front camera (Pi Camera Module 3)
+        front_topic = str(self.get_parameter("front_camera_topic").value)
+        if self._front_frame_buffer is not None:
+            self._front_sub = self.create_subscription(
+                CompressedImage, front_topic, self._on_front_img, qos_profile_sensor_data
+            )
+            self.get_logger().info(f"Front camera subscribing to {front_topic}")
+        else:
+            self._front_sub = None
 
         gimbal_topic = str(self.get_parameter("gimbal_topic").value)
         self._gimbal_pub = self.create_publisher(Vector3, gimbal_topic, 10)
@@ -1184,16 +1227,19 @@ class WebVideoNode(Node):
     def center_gimbal(self) -> None:
         self.set_gimbal(self._pan_neutral, self._tilt_neutral)
 
-    def set_cmd_vel(self, linear_x_unit: float, angular_z_unit: float) -> None:
+    def set_cmd_vel(self, linear_x_unit: float, angular_z_unit: float, linear_y_unit: float = 0.0) -> None:
         # Inputs from UI are in approx [-1..1]. Clamp and scale.
         lin_u = self._clamp(float(linear_x_unit), -1.0, 1.0)
+        lat_u = self._clamp(float(linear_y_unit), -1.0, 1.0)
         ang_u = self._clamp(float(angular_z_unit), -1.0, 1.0)
 
         self._cmd_linear_x = float(lin_u) * float(self._max_linear_mps)
+        self._cmd_linear_y = float(lat_u) * float(self._max_linear_mps)
         self._cmd_angular_z = float(ang_u) * float(self._max_angular_rps)
 
         msg = Twist()
         msg.linear.x = float(self._cmd_linear_x)
+        msg.linear.y = float(self._cmd_linear_y)
         msg.angular.z = float(self._cmd_angular_z)
         self._cmd_pub.publish(msg)
 
@@ -1203,6 +1249,7 @@ class WebVideoNode(Node):
 
     def stop_cmd_vel(self) -> None:
         self._cmd_linear_x = 0.0
+        self._cmd_linear_y = 0.0
         self._cmd_angular_z = 0.0
         msg = Twist()
         self._cmd_pub.publish(msg)
@@ -1237,6 +1284,18 @@ class WebVideoNode(Node):
                 fmt = ''
             self.get_logger().info(f"First frame received (format={fmt}, bytes={len(msg.data)})")
 
+    def _on_front_img(self, msg: CompressedImage) -> None:
+        if not msg.data or self._front_frame_buffer is None:
+            return
+        self._front_frame_buffer.set(bytes(msg.data))
+        self._front_frame_count += 1
+        if self._front_frame_count == 1:
+            try:
+                fmt = getattr(msg, 'format', '')
+            except Exception:
+                fmt = ''
+            self.get_logger().info(f"First front camera frame received (format={fmt}, bytes={len(msg.data)})")
+
     def status_dict(self) -> dict:
         now = time.monotonic()
         age_s = None
@@ -1248,12 +1307,17 @@ class WebVideoNode(Node):
             'frame_count': int(self._frame_count),
             'last_frame_age_s': age_s,
             'latest_jpeg_bytes': int(size),
+            'front_camera': {
+                'frame_count': int(self._front_frame_count),
+                'available': self._front_frame_buffer is not None,
+            },
             'cmd_vel': {
                 'max_linear_mps': float(self._max_linear_mps),
                 'max_angular_rps': float(self._max_angular_rps),
                 'timeout_sec': float(self._cmd_timeout_sec),
                 'state': {
                     'linear_x': float(self._cmd_linear_x),
+                    'linear_y': float(self._cmd_linear_y),
                     'angular_z': float(self._cmd_angular_z),
                     'last_cmd_age_s': (None if self._cmd_last_rx_monotonic <= 0.0 else max(0.0, now - self._cmd_last_rx_monotonic)),
                 },
@@ -1515,6 +1579,7 @@ class WebVideoNode(Node):
 def make_handler(
     *,
     frame_buffer: FrameBuffer,
+    front_frame_buffer: FrameBuffer = None,
     fps_limit: float,
     logger,
     status_provider=None,
@@ -1726,6 +1791,61 @@ def make_handler(
                         logger.warn(f"stream client error: {e!r}")
                     return
 
+            if path.startswith("/stream_front.mjpg"):
+                if front_frame_buffer is None:
+                    self.send_response(HTTPStatus.SERVICE_UNAVAILABLE)
+                    self.send_header("Content-Type", "text/plain; charset=utf-8")
+                    self.end_headers()
+                    self.wfile.write(b"Front camera not available\n")
+                    return
+
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Age", "0")
+                self.send_header("Cache-Control", "no-cache, private")
+                self.send_header("Pragma", "no-cache")
+                self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+                self.end_headers()
+                try:
+                    self.wfile.flush()
+                except Exception:
+                    pass
+
+                last_stamp = 0.0
+                last_sent_time = 0.0
+
+                try:
+                    while True:
+                        now = time.monotonic()
+                        sleep_needed = (last_sent_time + min_period) - now
+                        if sleep_needed > 0:
+                            time.sleep(sleep_needed)
+
+                        frame = front_frame_buffer.wait_for_newer(last_stamp, timeout=1.0)
+                        if frame.jpeg is None:
+                            continue
+
+                        last_stamp = frame.stamp_monotonic
+                        last_sent_time = time.monotonic()
+
+                        headers = (
+                            boundary + b"\r\n"
+                            b"Content-Type: image/jpeg\r\n" +
+                            f"Content-Length: {len(frame.jpeg)}\r\n\r\n".encode("ascii")
+                        )
+                        self.wfile.write(headers)
+                        self.wfile.write(frame.jpeg)
+                        self.wfile.write(b"\r\n")
+                        try:
+                            self.wfile.flush()
+                        except Exception:
+                            pass
+                except (BrokenPipeError, ConnectionResetError):
+                    return
+                except Exception as e:
+                    if logger is not None:
+                        logger.warn(f"front stream client error: {e!r}")
+                    return
+
             self.send_response(HTTPStatus.NOT_FOUND)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.end_headers()
@@ -1825,19 +1945,20 @@ def make_handler(
                 try:
                     payload = json.loads(raw.decode('utf-8'))
                     lin = float(payload.get('linear_x'))
+                    lat = float(payload.get('linear_y', 0.0))
                     ang = float(payload.get('angular_z'))
                 except Exception:
                     self.send_response(HTTPStatus.BAD_REQUEST)
                     self.end_headers()
                     return
 
-                if lin != lin or ang != ang:
+                if lin != lin or ang != ang or lat != lat:
                     self.send_response(HTTPStatus.BAD_REQUEST)
                     self.end_headers()
                     return
 
                 try:
-                    cmd_vel_setter(lin, ang)
+                    cmd_vel_setter(lin, ang, lat)
                 except Exception:
                     self.send_response(HTTPStatus.INTERNAL_SERVER_ERROR)
                     self.end_headers()
@@ -2132,7 +2253,8 @@ def make_handler(
 def main() -> None:
     rclpy.init()
     frame_buffer = FrameBuffer()
-    node = WebVideoNode(frame_buffer)
+    front_frame_buffer = FrameBuffer()
+    node = WebVideoNode(frame_buffer, front_frame_buffer)
 
     bind = str(node.get_parameter("bind").value)
     port = int(node.get_parameter("port").value)
@@ -2146,6 +2268,7 @@ def main() -> None:
 
     handler_cls = make_handler(
         frame_buffer=frame_buffer,
+        front_frame_buffer=front_frame_buffer,
         fps_limit=fps_limit,
         logger=node.get_logger(),
         status_provider=node.status_dict,
@@ -2171,7 +2294,7 @@ def main() -> None:
     httpd.timeout = 0.5
 
     node.get_logger().info(
-        f"Web video server on http://{bind}:{port}/ (MJPEG: /stream.mjpg, status: /status, gimbal: /api/gimbal, drive: /api/cmd_vel)"
+        f"Web video server on http://{bind}:{port}/ (MJPEG: /stream.mjpg, front: /stream_front.mjpg, status: /status)"
     )
 
     try:

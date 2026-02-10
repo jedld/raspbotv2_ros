@@ -127,6 +127,20 @@ opencv_camera:
     jpeg_quality: 80
     topic: "image_raw/compressed"
 
+pi_camera:
+  ros__parameters:
+    # Capture backend: auto | gstreamer | v4l2
+    # auto tries GStreamer (libcamerasrc) first, then V4L2
+    backend: "auto"
+    camera_index: 0
+    v4l2_device_index: -1  # -1 = auto-discover (/dev/video10+)
+    frame_id: "front_camera_link"
+    width: 640
+    height: 480
+    fps: 30.0
+    jpeg_quality: 80
+    topic: "front_camera/compressed"
+
 camera_gimbal:
   ros__parameters:
     i2c_bus: 1

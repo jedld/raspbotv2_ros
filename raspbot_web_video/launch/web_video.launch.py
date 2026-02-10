@@ -22,6 +22,8 @@ def generate_launch_description():
     max_angular_rps = LaunchConfiguration('max_angular_rps')
     cmd_timeout_sec = LaunchConfiguration('cmd_timeout_sec')
 
+    front_camera_topic = LaunchConfiguration('front_camera_topic')
+
     detections_topic = LaunchConfiguration('detections_topic')
     tracking_enable_topic = LaunchConfiguration('tracking_enable_topic')
     tracking_config_topic = LaunchConfiguration('tracking_config_topic')
@@ -45,6 +47,7 @@ def generate_launch_description():
         DeclareLaunchArgument('max_angular_rps', default_value='1.2'),
         DeclareLaunchArgument('cmd_timeout_sec', default_value='0.5'),
 
+        DeclareLaunchArgument('front_camera_topic', default_value='front_camera/compressed'),
         DeclareLaunchArgument('detections_topic', default_value='detections/json'),
         DeclareLaunchArgument('tracking_enable_topic', default_value='tracking/enable'),
         DeclareLaunchArgument('tracking_config_topic', default_value='tracking/config'),
@@ -57,6 +60,7 @@ def generate_launch_description():
             output='screen',
             parameters=[{
                 'topic': topic,
+                'front_camera_topic': front_camera_topic,
                 'bind': bind,
                 'port': port,
                 'fps_limit': fps_limit,

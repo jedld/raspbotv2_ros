@@ -484,6 +484,15 @@ class MotorDriverNode(Node):
 
         self._last_cmd_time = time.time()
 
+        # ── Immediately clear heading-hold when stopped ─────────────
+        # This prevents the next _tick() from applying stale corrections
+        # to zero PWMs before _on_imu has a chance to gate them.
+        if not self._is_any_motion_commanded():
+            self._gyro_correction = 0.0
+            self._heading_target_deg = None
+            self._last_heading_hold_time = None
+            self._lateral_correction = 0.0
+
         # If we were stopped and are now commanded to move, start a brief kick window.
         now = self._last_cmd_time
         if self._startup_kick_pwm > 0 and self._startup_kick_duration > 0.0:
@@ -545,6 +554,16 @@ class MotorDriverNode(Node):
 
         # During the kick window, force a slightly higher PWM to help all wheels start together.
         kick_active = self._startup_kick_pwm > 0 and self._startup_kick_duration > 0.0 and now <= self._kick_until_time
+
+        # ── Hard stop: when ALL base PWMs are zero, send an explicit stop ──
+        # This prevents residual heading-hold / trim from spinning motors.
+        if not self._is_any_motion_commanded():
+            try:
+                self._car.stop()
+            except Exception as e:
+                self.get_logger().warn(f'Failed to stop motors (zero cmd): {e!r}')
+            self._last_write_time = now
+            return
 
         try:
             if self._drive_mode == 'mecanum' and self._car.protocol == 'pi5':

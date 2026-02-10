@@ -16,6 +16,7 @@ def generate_launch_description():
     enable_lightbar = LaunchConfiguration('enable_lightbar')
     enable_oled = LaunchConfiguration('enable_oled')
     enable_imu = LaunchConfiguration('enable_imu')
+    enable_front_camera = LaunchConfiguration('enable_front_camera')
     params_file = LaunchConfiguration('params_file')
 
     default_params_file = PathJoinSubstitution([
@@ -33,6 +34,7 @@ def generate_launch_description():
         DeclareLaunchArgument('enable_lightbar', default_value='true'),
         DeclareLaunchArgument('enable_oled', default_value='true'),
         DeclareLaunchArgument('enable_imu', default_value='true'),
+        DeclareLaunchArgument('enable_front_camera', default_value='false'),
         DeclareLaunchArgument('params_file', default_value=default_params_file),
 
         Node(
@@ -101,5 +103,14 @@ def generate_launch_description():
             output='screen',
             parameters=[params_file],
             condition=IfCondition(enable_imu),
+        ),
+
+        Node(
+            package='raspbot_hw',
+            executable='pi_camera',
+            name='pi_camera',
+            output='screen',
+            parameters=[params_file],
+            condition=IfCondition(enable_front_camera),
         ),
     ])
