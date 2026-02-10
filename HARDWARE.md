@@ -40,6 +40,12 @@ From ROS 2 nodes and vendor I2C protocol:
   - ROS: `camera_gimbal` node subscribes to `camera_gimbal/command_deg`
   - I2C: servo commands on the controller board
 
+- **WS2812 RGB light-bar (14 LEDs)**
+  - ROS: `lightbar` node subscribes to `lightbar/command` (`std_msgs/String`, JSON)
+  - I2C: registers `0x03`, `0x04`, `0x08`, `0x09` on the pi5 controller
+  - Supports: solid colour, per-LED colour, breathing, rainbow, chase effects
+  - Also controllable from the web UI (port 8080)
+
 ## OS / device prerequisites
 
 Typical device nodes:
@@ -138,6 +144,7 @@ Nodes:
 - `/gpio_sensors`
 - `/opencv_camera` (optional)
 - `/camera_gimbal`
+- `/lightbar`
 - `/oled` (optional)
 
 Topics:
@@ -147,6 +154,7 @@ Topics:
 - `/tracking/state` (`std_msgs/Int32`, bit0=L1, bit1=L2, bit2=R1, bit3=R2)
 - `/image_raw/compressed` (`sensor_msgs/CompressedImage`, optional)
 - `/camera_gimbal/command_deg` (`geometry_msgs/Vector3`, degrees)
+- `/lightbar/command` (`std_msgs/String`, JSON – see lightbar_node.py for schema)
 - `/oled/text` (`std_msgs/String`, optional)
 
 ## Quick board sanity checks

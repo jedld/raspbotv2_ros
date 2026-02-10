@@ -125,6 +125,25 @@ INDEX_HTML = """<!doctype html>
         </div>
 
         <div class=\"card\">
+            <h2>&#127752; Light Bar</h2>
+            <p class=\"muted\">14 addressable WS2812 RGB LEDs. Publishes to <code>lightbar/command</code>.</p>
+            <div class=\"row\">
+                <div>
+                    <label for=\"lbColor\">Colour:</label>
+                    <input id=\"lbColor\" type=\"color\" value=\"#0066ff\" />
+                </div>
+                <button class=\"primary\" id=\"lbSolid\">Solid</button>
+                <button id=\"lbRainbow\">Rainbow</button>
+                <button id=\"lbBreathe\">Breathe</button>
+                <button id=\"lbChase\">Chase</button>
+                <button class=\"danger\" id=\"lbOff\">Off</button>
+            </div>
+            <div class=\"row\" style=\"margin-top: 8px;\">
+                <div class=\"kv\">Mode: <span id=\"lbState\">off</span></div>
+            </div>
+        </div>
+
+        <div class=\"card\">
             <h2>&#128247; Snapshot</h2>
             <p class=\"muted\">Capture a full-resolution still from the current camera frame.</p>
             <div class=\"row\">
@@ -333,6 +352,38 @@ INDEX_HTML = """<!doctype html>
                 snapBtn.disabled = false;
             }
         });
+
+        // ---- Lightbar ----
+        const lbColor = document.getElementById('lbColor');
+        const lbStateEl = document.getElementById('lbState');
+        async function sendLightbar(cmd) {
+            try {
+                await fetch('/api/lightbar', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(cmd)
+                });
+                lbStateEl.textContent = cmd.mode || 'off';
+            } catch (e) { /* ignore */ }
+        }
+        function hexToRgb(hex) {
+            const n = parseInt(hex.replace('#',''), 16);
+            return {r: (n>>16)&255, g: (n>>8)&255, b: n&255};
+        }
+        document.getElementById('lbSolid').addEventListener('click', () => {
+            const c = hexToRgb(lbColor.value);
+            sendLightbar({mode:'solid', r:c.r, g:c.g, b:c.b});
+        });
+        document.getElementById('lbRainbow').addEventListener('click', () => sendLightbar({mode:'rainbow', speed:1.0}));
+        document.getElementById('lbBreathe').addEventListener('click', () => {
+            const c = hexToRgb(lbColor.value);
+            sendLightbar({mode:'breathing', r:c.r, g:c.g, b:c.b, period:2.0});
+        });
+        document.getElementById('lbChase').addEventListener('click', () => {
+            const c = hexToRgb(lbColor.value);
+            sendLightbar({mode:'chase', r:c.r, g:c.g, b:c.b, speed:1.0});
+        });
+        document.getElementById('lbOff').addEventListener('click', () => sendLightbar({mode:'off'}));
 
         function resizeOverlay() {
             const w = Math.max(1, Math.floor(video.clientWidth));
@@ -648,6 +699,7 @@ class WebVideoNode(Node):
         self.declare_parameter("follow_enable_topic", "follow/enable")
         self.declare_parameter("follow_target_area_topic", "follow/target_area")
         self.declare_parameter("follow_max_linear_topic", "follow/max_linear")
+        self.declare_parameter("lightbar_command_topic", "lightbar/command")
 
         self._frame_buffer = frame_buffer
         self._frame_count = 0
@@ -721,6 +773,10 @@ class WebVideoNode(Node):
         follow_max_linear_topic = str(self.get_parameter("follow_max_linear_topic").value)
         self._follow_max_linear = 0.30
         self._follow_max_linear_pub = self.create_publisher(Float64, follow_max_linear_topic, 10)
+
+        lightbar_command_topic = str(self.get_parameter("lightbar_command_topic").value)
+        self._lightbar_pub = self.create_publisher(String, lightbar_command_topic, 10)
+        self.get_logger().info(f"Lightbar command topic: {lightbar_command_topic} (std_msgs/String JSON)")
 
     @staticmethod
     def _clamp(x: float, lo: float, hi: float) -> float:
@@ -931,6 +987,12 @@ class WebVideoNode(Node):
         msg.data = [int(self._tracking_pan_sign), int(self._tracking_tilt_sign)]
         self._tracking_config_pub.publish(msg)
 
+    def set_lightbar_command(self, cmd: dict) -> None:
+        """Forward a JSON lightbar command to the lightbar/command topic."""
+        msg = String()
+        msg.data = json.dumps(cmd)
+        self._lightbar_pub.publish(msg)
+
 
 def make_handler(
     *,
@@ -949,6 +1011,7 @@ def make_handler(
     follow_config_setter=None,
     snapshot_taker=None,
     snapshot_dir=None,
+    lightbar_setter=None,
 ):
     boundary = b"--frame"
     fps = max(float(fps_limit), 1.0)
@@ -1421,6 +1484,40 @@ def make_handler(
                     self.end_headers()
                 return
 
+            if path == '/api/lightbar':
+                if not callable(lightbar_setter):
+                    self.send_response(HTTPStatus.NOT_IMPLEMENTED)
+                    self.end_headers()
+                    return
+
+                try:
+                    length = int(self.headers.get('Content-Length', '0'))
+                except Exception:
+                    length = 0
+                if length <= 0 or length > 8192:
+                    self.send_response(HTTPStatus.BAD_REQUEST)
+                    self.end_headers()
+                    return
+
+                raw = self.rfile.read(length)
+                try:
+                    payload = json.loads(raw.decode('utf-8'))
+                except Exception:
+                    self.send_response(HTTPStatus.BAD_REQUEST)
+                    self.end_headers()
+                    return
+
+                try:
+                    lightbar_setter(payload)
+                except Exception:
+                    self.send_response(HTTPStatus.INTERNAL_SERVER_ERROR)
+                    self.end_headers()
+                    return
+
+                self.send_response(HTTPStatus.NO_CONTENT)
+                self.end_headers()
+                return
+
             self.send_response(HTTPStatus.NOT_FOUND)
             self.send_header('Content-Type', 'text/plain; charset=utf-8')
             self.end_headers()
@@ -1460,6 +1557,7 @@ def main() -> None:
         follow_config_setter=node.set_follow_config,
         snapshot_taker=node.take_snapshot,
         snapshot_dir=str(node.get_parameter("snapshot_dir").value),
+        lightbar_setter=node.set_lightbar_command,
     )
     httpd = ThreadingHTTPServer((bind, port), handler_cls)
     # Allow the serve loop to wake up periodically so Ctrl-C / rclpy shutdown is responsive.

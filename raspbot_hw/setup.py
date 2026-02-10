@@ -27,6 +27,7 @@ setup(
             'gpio_sensors = raspbot_hw.gpio_sensors_node:main',
             'opencv_camera = raspbot_hw.opencv_camera_node:main',
             'camera_gimbal = raspbot_hw.camera_gimbal_node:main',
+            'lightbar = raspbot_hw.lightbar_node:main',
             'oled = raspbot_hw.oled_node:main',
         ],
     },

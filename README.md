@@ -4,7 +4,7 @@ This folder contains a minimal ROS 2 Foxy bringup for the Yahboom Raspbot V2 har
 
 Packages:
 
-- `raspbot_hw`: I2C motor driver + GPIO sensors + optional camera publisher
+- `raspbot_hw`: I2C motor driver + GPIO sensors + optional camera publisher + WS2812 light-bar
 - `raspbot_bringup`: unified bringup launch
 - `raspbot_web_video`: tiny web MJPEG viewer for the camera topic (includes drive, gimbal, tracking, and follow controls)
 - `raspbot_hailo_tracking`: Hailo-8 object detection, gimbal person tracking, and auto-follow
@@ -23,6 +23,9 @@ ros2 launch raspbot_bringup bringup.launch.py enable_hailo:=false
 
 # Disable web UI
 ros2 launch raspbot_bringup bringup.launch.py enable_web_video:=false
+
+# Disable light-bar
+ros2 launch raspbot_bringup bringup.launch.py enable_lightbar:=false
 ```
 
 The Hailo node needs a model HEF and labels file. If `hailo_hef_path` is empty

@@ -213,6 +213,55 @@ class I2CCar:
         state = 1 if bool(enabled) else 0
         self._write_block(0x06, [state])
 
+    # ------------------------------------------------------------------
+    # WS2812 RGB light-bar (14 LEDs, pi5 protocol only)
+    # ------------------------------------------------------------------
+    NUM_LEDS = 14
+
+    def lightbar_set_all_preset(self, on: bool, color_id: int = 0) -> None:
+        """Turn all LEDs on/off with a preset colour.
+
+        Reg 0x03 payload [state, color].
+        color_id: 0=red, 1=green, 2=blue, 3=yellow, 4=purple, 5=cyan, 6=white.
+        """
+        if self._protocol != 'pi5':
+            return
+        state = 1 if on else 0
+        self._write_block(0x03, [state, int(color_id) & 0xFF])
+
+    def lightbar_set_one_preset(self, index: int, on: bool, color_id: int = 0) -> None:
+        """Turn a single LED on/off with a preset colour.
+
+        Reg 0x04 payload [index, state, color].
+        """
+        if self._protocol != 'pi5':
+            return
+        state = 1 if on else 0
+        self._write_block(0x04, [int(index) & 0xFF, state, int(color_id) & 0xFF])
+
+    def lightbar_set_all_rgb(self, r: int, g: int, b: int) -> None:
+        """Set every LED to the same RGB colour.
+
+        Reg 0x08 payload [R, G, B] (0-255 each).
+        Sending (0,0,0) turns the bar off.
+        """
+        if self._protocol != 'pi5':
+            return
+        self._write_block(0x08, [int(r) & 0xFF, int(g) & 0xFF, int(b) & 0xFF])
+
+    def lightbar_set_one_rgb(self, index: int, r: int, g: int, b: int) -> None:
+        """Set a single LED to an RGB colour.
+
+        Reg 0x09 payload [index, R, G, B].
+        """
+        if self._protocol != 'pi5':
+            return
+        self._write_block(0x09, [int(index) & 0xFF, int(r) & 0xFF, int(g) & 0xFF, int(b) & 0xFF])
+
+    def lightbar_off(self) -> None:
+        """Turn the entire light-bar off."""
+        self.lightbar_set_all_rgb(0, 0, 0)
+
     def close(self) -> None:
         if self._dry_run or self._bus is None:
             return

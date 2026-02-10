@@ -16,6 +16,7 @@ def generate_launch_description():
     enable_gpio_sensors = LaunchConfiguration('enable_gpio_sensors')
     enable_camera = LaunchConfiguration('enable_camera')
     enable_gimbal = LaunchConfiguration('enable_gimbal')
+    enable_lightbar = LaunchConfiguration('enable_lightbar')
     enable_oled = LaunchConfiguration('enable_oled')
     play_startup_sound = LaunchConfiguration('play_startup_sound')
     enable_web_video = LaunchConfiguration('enable_web_video')
@@ -58,6 +59,7 @@ def generate_launch_description():
         DeclareLaunchArgument('enable_gpio_sensors', default_value='true'),
         DeclareLaunchArgument('enable_camera', default_value='true'),
         DeclareLaunchArgument('enable_gimbal', default_value='true'),
+        DeclareLaunchArgument('enable_lightbar', default_value='true'),
         DeclareLaunchArgument('enable_oled', default_value='true'),
         DeclareLaunchArgument('play_startup_sound', default_value='true'),
         DeclareLaunchArgument('enable_web_video', default_value='true'),
@@ -80,6 +82,7 @@ def generate_launch_description():
                 'enable_gpio_sensors': enable_gpio_sensors,
                 'enable_camera': enable_camera,
                 'enable_gimbal': enable_gimbal,
+                'enable_lightbar': enable_lightbar,
                 'enable_oled': enable_oled,
                 'params_file': params_file,
             }.items(),
