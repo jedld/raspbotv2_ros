@@ -33,10 +33,14 @@ class OpenCVCameraNode(Node):
             ) from e
 
         self._cv2 = cv2
-        self._cap = self._cv2.VideoCapture(self._device_index)
+        # Use V4L2 backend explicitly to avoid GStreamer/libcamera conflicts
+        self._cap = self._cv2.VideoCapture(self._device_index, self._cv2.CAP_V4L2)
         self._cap.set(self._cv2.CAP_PROP_FRAME_WIDTH, self._width)
         self._cap.set(self._cv2.CAP_PROP_FRAME_HEIGHT, self._height)
         self._cap.set(self._cv2.CAP_PROP_FPS, self._fps)
+        # Prefer MJPEG for lower CPU usage on USB cameras
+        self._cap.set(self._cv2.CAP_PROP_FOURCC,
+                      self._cv2.VideoWriter_fourcc(*'MJPG'))
 
         if not self._cap.isOpened():
             raise RuntimeError(f'Failed to open camera device index {self._device_index}')
