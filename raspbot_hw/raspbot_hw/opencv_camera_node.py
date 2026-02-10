@@ -1,3 +1,5 @@
+import glob
+import os
 import time
 
 import rclpy
@@ -5,11 +7,65 @@ from rclpy.node import Node
 from sensor_msgs.msg import CompressedImage
 
 
+def _find_usb_camera() -> int:
+    """Auto-detect a USB webcam by scanning /sys/class/video4linux.
+
+    Skips platform devices (CSI/PiSP/rpivid) and returns the lowest
+    /dev/videoN index that is a USB Video Class capture device.
+    Returns -1 if nothing found.
+    """
+    best = -1
+    for entry in sorted(glob.glob('/sys/class/video4linux/video*')):
+        idx_str = os.path.basename(entry).replace('video', '')
+        try:
+            idx = int(idx_str)
+        except ValueError:
+            continue
+
+        # Read the device name
+        name_path = os.path.join(entry, 'name')
+        if not os.path.isfile(name_path):
+            continue
+        try:
+            name = open(name_path).read().strip()
+        except OSError:
+            continue
+
+        # Skip known platform / ISP / codec devices
+        lower = name.lower()
+        skip_keywords = ('pispbe', 'rp1-cfe', 'rpivid', 'bcm2835',
+                         'unicam', 'isp', 'codec', 'scaler')
+        if any(kw in lower for kw in skip_keywords):
+            continue
+
+        # Check that the device bus is USB (follow symlink into /sys/devices/...usb...)
+        dev_link = os.path.realpath(os.path.join(entry, 'device'))
+        if 'usb' not in dev_link and 'USB' not in dev_link:
+            continue
+
+        # Prefer the first (lowest-numbered) capture device
+        # V4L2 USB cameras typically expose two nodes: video-capture
+        # and metadata. The capture node lists 'Video Capture' in
+        # /sys/.../video4linux/videoN/index == 0.
+        index_path = os.path.join(entry, 'index')
+        try:
+            v4l_index = int(open(index_path).read().strip())
+        except (OSError, ValueError):
+            v4l_index = 0
+        if v4l_index != 0:
+            continue
+
+        best = idx
+        break
+
+    return best
+
+
 class OpenCVCameraNode(Node):
     def __init__(self):
         super().__init__('opencv_camera')
 
-        self.declare_parameter('device_index', 0)
+        self.declare_parameter('device_index', -1)
         self.declare_parameter('frame_id', 'camera_link')
         self.declare_parameter('width', 640)
         self.declare_parameter('height', 480)
@@ -24,6 +80,19 @@ class OpenCVCameraNode(Node):
         self._fps = float(self.get_parameter('fps').value)
         self._jpeg_quality = int(self.get_parameter('jpeg_quality').value)
         self._topic = str(self.get_parameter('topic').value)
+
+        # Auto-detect USB webcam when device_index is -1
+        if self._device_index < 0:
+            detected = _find_usb_camera()
+            if detected < 0:
+                raise RuntimeError(
+                    'Auto-detect: no USB webcam found. '
+                    'Set device_index explicitly or check connections.'
+                )
+            self.get_logger().info(
+                f'Auto-detected USB webcam at /dev/video{detected}'
+            )
+            self._device_index = detected
 
         try:
             import cv2  # type: ignore

@@ -10,6 +10,7 @@ Subscribes to:
   imu/calibrate       (std_msgs/Empty)           trigger gyro re-calibration
   imu/led             (std_msgs/String)           set Arduino RGB LED (R/G/B/W/O)
 """
+import base64
 import math
 import threading
 import time
@@ -18,7 +19,7 @@ from typing import Optional
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Imu
-from std_msgs.msg import Bool, Empty, Float32, Float64, Int32, String
+from std_msgs.msg import Bool, Empty, Float32, Float64, Int32, String, UInt8MultiArray
 
 
 G_MPS2 = 9.80665  # 1 g in m/s²
@@ -93,9 +94,16 @@ class ImuSerialNode(Node):
         self._yaw_pub = self.create_publisher(Float64, 'imu/yaw_deg', 10)
         self._cal_pub = self.create_publisher(Bool, 'imu/calibrated', 10)
 
-        # ── Subscribers ───────────────────────────────────────────────
+        # ── Audio streaming ───────────────────────────────────────────
+        self.declare_parameter('audio_sample_rate', 8000)
+        self._audio_sample_rate = int(self.get_parameter('audio_sample_rate').value)
+        self._audio_pub = self.create_publisher(UInt8MultiArray, 'imu/audio', 10)
+        self._audio_enabled = False
+
+        # ── Subscribers ─────────────────────────────────────────────
         self.create_subscription(Empty, 'imu/calibrate', self._on_calibrate, 10)
         self.create_subscription(String, 'imu/led', self._on_led, 10)
+        self.create_subscription(Bool, 'imu/audio_enable', self._on_audio_enable, 10)
 
         # ── Serial reader thread ──────────────────────────────────────
         self._reader_thread = threading.Thread(target=self._reader_loop, daemon=True)
@@ -146,6 +154,24 @@ class ImuSerialNode(Node):
         c = str(msg.data).strip().upper()
         if c in ('R', 'G', 'B', 'W', 'O'):
             self._send_command(c)
+
+    def _on_audio_enable(self, msg: Bool) -> None:
+        enable = bool(msg.data)
+        if enable != self._audio_enabled:
+            self._audio_enabled = enable
+            self._send_command('A' if enable else 'a')
+            self.get_logger().info(f'Audio streaming {"enabled" if enable else "disabled"}')
+
+    def _parse_audio(self, line: str) -> None:
+        """Parse $AUD,<base64_data> and publish raw PCM bytes."""
+        try:
+            b64_data = line[5:]  # skip "$AUD,"
+            raw = base64.b64decode(b64_data)
+            msg = UInt8MultiArray()
+            msg.data = list(raw)
+            self._audio_pub.publish(msg)
+        except Exception:
+            pass
 
     # ── Reader loop (background thread) ───────────────────────────────
 
@@ -226,6 +252,8 @@ class ImuSerialNode(Node):
 
             if line.startswith('$IMU,'):
                 self._parse_imu(line)
+            elif line.startswith('$AUD,'):
+                self._parse_audio(line)
             elif line.startswith('$CAL,'):
                 self.get_logger().info(f'Arduino: {line}')
                 if 'done' in line:

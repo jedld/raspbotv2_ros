@@ -18,6 +18,12 @@
  *       mic      : microphone RMS level (0-32767, int)
  *       ms       : millis() timestamp
  *
+ *   Audio data (sent when audio streaming is enabled via 'A' command):
+ *     $AUD,<base64_pcm>\n
+ *
+ *       base64_pcm : base64-encoded 8-bit unsigned PCM at 8 kHz
+ *                    512 samples per chunk (~64 ms)
+ *
  *   On startup or when the host sends "?":
  *     $INFO,nano_rp2040,<IMU_HZ>,<version>\n
  *
@@ -32,6 +38,8 @@
  *     '1'  → set output rate to  50 Hz
  *     '2'  → set output rate to 100 Hz  (default)
  *     '3'  → set output rate to 200 Hz
+ *     'A'  → enable audio streaming (8 kHz 8-bit unsigned PCM via $AUD lines)
+ *     'a'  → disable audio streaming
  *
  * ── Required Arduino libraries ─────────────────────────────────────
  *
@@ -59,7 +67,7 @@
 #include <WiFiNINA.h>          // for the on-board RGB LED only
 
 // ── Tunables ─────────────────────────────────────────────────────────
-#define FIRMWARE_VERSION   "1.0.0"
+#define FIRMWARE_VERSION   "1.1.0"
 #define DEFAULT_HZ         100        // default output rate
 #define SERIAL_BAUD        115200
 #define MIC_SAMPLE_RATE    16000      // Hz
@@ -83,6 +91,32 @@ static bool   g_calibrated      = false;
 static unsigned long    g_interval_us  = 1000000UL / DEFAULT_HZ;
 static unsigned long    g_last_send_us = 0;
 
+// ── Audio streaming ──────────────────────────────────────────────────
+#define AUD_RING_SIZE      2048     // 8-bit PCM ring buffer (~256 ms at 8 kHz)
+#define AUD_CHUNK_SIZE     512      // samples per $AUD line (~64 ms)
+
+static volatile bool     g_audio_stream = false;
+static uint8_t           g_aud_ring[AUD_RING_SIZE];
+static volatile uint16_t g_aud_wr = 0;     // written by ISR
+static uint16_t          g_aud_rd = 0;     // read by main loop only
+
+// ── Base64 encoder ───────────────────────────────────────────────────
+static const char g_b64[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+static void sendBase64(const uint8_t* data, int len) {
+  for (int i = 0; i < len; i += 3) {
+    int rem = len - i;
+    uint32_t n = (uint32_t)data[i] << 16;
+    if (rem > 1) n |= (uint32_t)data[i + 1] << 8;
+    if (rem > 2) n |= data[i + 2];
+    Serial.write(g_b64[(n >> 18) & 0x3F]);
+    Serial.write(g_b64[(n >> 12) & 0x3F]);
+    Serial.write((rem > 1) ? g_b64[(n >> 6) & 0x3F] : '=');
+    Serial.write((rem > 2) ? g_b64[n & 0x3F] : '=');
+  }
+}
+
 static float g_last_temp      = 0.0f;
 static unsigned long g_last_temp_ms = 0;
 #define TEMP_INTERVAL_MS  500   // read temperature every 500 ms (slow sensor)
@@ -103,6 +137,17 @@ void onPDMdata() {
   }
   if (samplesToRead > 0) {
     g_mic_rms = (int)sqrt((double)sum / samplesToRead);
+  }
+
+  // Audio streaming: downsample 16 kHz → 8 kHz, convert to 8-bit unsigned
+  if (g_audio_stream) {
+    for (int i = 0; i < samplesToRead; i += 2) {
+      int16_t s = g_mic_buf[i];
+      uint8_t u8 = (uint8_t)((s >> 8) + 128);
+      uint16_t wr = g_aud_wr;
+      g_aud_ring[wr] = u8;
+      g_aud_wr = (wr + 1) % AUD_RING_SIZE;
+    }
   }
 }
 
@@ -239,7 +284,27 @@ void loop() {
       case '1': g_interval_us = 1000000UL /  50; break;
       case '2': g_interval_us = 1000000UL / 100; break;
       case '3': g_interval_us = 1000000UL / 200; break;
+      case 'A': g_audio_stream = true;  g_aud_rd = g_aud_wr; break;
+      case 'a': g_audio_stream = false; break;
       default: break;
+    }
+  }
+
+  // ---- Send audio chunk if enough data accumulated ----
+  if (g_audio_stream) {
+    uint16_t wr = g_aud_wr;
+    uint16_t avail = (wr >= g_aud_rd)
+                     ? (wr - g_aud_rd)
+                     : (AUD_RING_SIZE - g_aud_rd + wr);
+    if (avail >= AUD_CHUNK_SIZE) {
+      uint8_t chunk[AUD_CHUNK_SIZE];
+      for (int i = 0; i < AUD_CHUNK_SIZE; i++) {
+        chunk[i] = g_aud_ring[g_aud_rd];
+        g_aud_rd = (g_aud_rd + 1) % AUD_RING_SIZE;
+      }
+      Serial.print("$AUD,");
+      sendBase64(chunk, AUD_CHUNK_SIZE);
+      Serial.println();
     }
   }
 

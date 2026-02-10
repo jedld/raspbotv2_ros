@@ -13,7 +13,7 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from geometry_msgs.msg import Vector3, Twist
 from sensor_msgs.msg import CompressedImage, Imu
-from std_msgs.msg import Bool, Empty, Float32, Float64, Int32, Int32MultiArray, String
+from std_msgs.msg import Bool, Empty, Float32, Float64, Int32, Int32MultiArray, String, UInt8MultiArray
 
 
 INDEX_HTML = """<!doctype html>
@@ -242,6 +242,27 @@ INDEX_HTML = """<!doctype html>
                     </div>
                     <div class=\"kv\">Rotation: <span id=\"imuRotateStatus\">idle</span></div>
                 </div>
+            </div>
+        </div>
+
+        <div class=\"card\" id=\"micCard\">
+            <h2>&#127908; Microphone</h2>
+            <p class=\"muted\">Stream audio from Arduino Nano PDM mic (8 kHz mono). Uses Web Audio API for browser playback.</p>
+            <div class=\"row\">
+                <button class=\"primary\" id=\"micBtn\">Enable Mic</button>
+                <div style=\"flex:2 1 300px;\">
+                    <div style=\"background:#eee;border-radius:4px;height:20px;overflow:hidden;position:relative;\">
+                        <div id=\"micVu\" style=\"background:linear-gradient(90deg,#4caf50,#ff9800,#f44336);height:100%;width:0%;transition:width 60ms;border-radius:4px;\"></div>
+                    </div>
+                </div>
+                <div>
+                    <label for=\"micVol\">Vol: <span id=\"micVolVal\">80</span>%</label>
+                    <input id=\"micVol\" type=\"range\" min=\"0\" max=\"100\" step=\"5\" value=\"80\" style=\"width:100px;\" />
+                </div>
+            </div>
+            <div class=\"row\" style=\"margin-top:6px;\">
+                <div class=\"kv\">Status: <span id=\"micStatus\">off</span></div>
+                <div class=\"kv\">Buffer: <span id=\"micBufInfo\">-</span></div>
             </div>
         </div>
   </div>
@@ -993,6 +1014,111 @@ INDEX_HTML = """<!doctype html>
                 frontCamStatus.style.color = '#b00';
             }
         }, 2000);
+
+        // ──────────────────────────────────────────────────────────────
+        // Microphone Streaming (Arduino PDM → 8 kHz unsigned 8-bit PCM)
+        // ──────────────────────────────────────────────────────────────
+        const micBtn = document.getElementById('micBtn');
+        const micVu = document.getElementById('micVu');
+        const micVol = document.getElementById('micVol');
+        const micVolVal = document.getElementById('micVolVal');
+        const micStatusEl = document.getElementById('micStatus');
+        const micBufInfo = document.getElementById('micBufInfo');
+
+        let micEnabled = false;
+        let micAudioCtx = null;
+        let micGainNode = null;
+        let micProcessor = null;
+        let micReader = null;
+        const MIC_RING_SIZE = 32768;
+        let micRingBuf = new Float32Array(MIC_RING_SIZE);
+        let micRingWr = 0;
+        let micRingRd = 0;
+
+        micVol.addEventListener('input', () => {
+            micVolVal.textContent = micVol.value;
+            if (micGainNode) micGainNode.gain.value = Number(micVol.value) / 100;
+        });
+
+        micBtn.addEventListener('click', () => {
+            if (micEnabled) { disableMic(); } else { enableMic(); }
+        });
+
+        async function enableMic() {
+            try {
+                await fetch('/api/audio/enable', { method: 'POST' });
+
+                micAudioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 8000 });
+                micGainNode = micAudioCtx.createGain();
+                micGainNode.gain.value = Number(micVol.value) / 100;
+                micGainNode.connect(micAudioCtx.destination);
+
+                micProcessor = micAudioCtx.createScriptProcessor(2048, 0, 1);
+                micProcessor.onaudioprocess = function(e) {
+                    const out = e.outputBuffer.getChannelData(0);
+                    let peak = 0;
+                    for (let i = 0; i < out.length; i++) {
+                        if (micRingRd !== micRingWr) {
+                            out[i] = micRingBuf[micRingRd];
+                            const a = Math.abs(out[i]);
+                            if (a > peak) peak = a;
+                            micRingRd = (micRingRd + 1) & (MIC_RING_SIZE - 1);
+                        } else {
+                            out[i] = 0;
+                        }
+                    }
+                    micVu.style.width = Math.min(100, peak * 250).toFixed(0) + '%';
+                    const avail = (micRingWr >= micRingRd)
+                                  ? (micRingWr - micRingRd)
+                                  : (MIC_RING_SIZE - micRingRd + micRingWr);
+                    micBufInfo.textContent = avail + ' samples';
+                };
+                micProcessor.connect(micGainNode);
+
+                micEnabled = true;
+                micBtn.textContent = 'Disable Mic';
+                micBtn.classList.remove('primary');
+                micBtn.classList.add('danger');
+                micStatusEl.textContent = 'connecting...';
+                micStatusEl.style.color = '#a80';
+
+                const resp = await fetch('/stream_audio');
+                micReader = resp.body.getReader();
+                micStatusEl.textContent = 'streaming';
+                micStatusEl.style.color = '#080';
+
+                while (micEnabled) {
+                    const { done, value } = await micReader.read();
+                    if (done) break;
+                    for (let i = 0; i < value.length; i++) {
+                        micRingBuf[micRingWr] = (value[i] - 128) / 128.0;
+                        micRingWr = (micRingWr + 1) & (MIC_RING_SIZE - 1);
+                    }
+                }
+            } catch (e) {
+                micStatusEl.textContent = 'error';
+                micStatusEl.style.color = '#b00';
+                console.error('Mic error:', e);
+            }
+        }
+
+        async function disableMic() {
+            micEnabled = false;
+            try { await fetch('/api/audio/disable', { method: 'POST' }); } catch(e) {}
+            if (micReader) { try { micReader.cancel(); } catch(e) {} micReader = null; }
+            if (micProcessor) { micProcessor.disconnect(); micProcessor = null; }
+            if (micGainNode) { micGainNode.disconnect(); micGainNode = null; }
+            if (micAudioCtx) { micAudioCtx.close(); micAudioCtx = null; }
+            micRingWr = 0;
+            micRingRd = 0;
+            micVu.style.width = '0%';
+            micBtn.textContent = 'Enable Mic';
+            micBtn.classList.remove('danger');
+            micBtn.classList.add('primary');
+            micStatusEl.textContent = 'off';
+            micStatusEl.style.color = '';
+            micBufInfo.textContent = '-';
+        }
     </script>
 </body>
 </html>
@@ -1031,8 +1157,44 @@ class FrameBuffer:
             return self._latest
 
 
+class AudioBuffer:
+    """Thread-safe buffer for streaming audio PCM chunks to HTTP clients."""
+
+    def __init__(self, max_chunks: int = 128) -> None:
+        self._chunks: list = []   # list of (seq, bytes)
+        self._seq = 0
+        self._max = max_chunks
+        self._cv = threading.Condition()
+
+    def push(self, data: bytes) -> None:
+        with self._cv:
+            self._chunks.append((self._seq, data))
+            self._seq += 1
+            if len(self._chunks) > self._max:
+                self._chunks = self._chunks[-self._max:]
+            self._cv.notify_all()
+
+    def get_newer(self, after_seq: int, timeout: float = 1.0):
+        """Return (latest_seq, concatenated_bytes) for chunks after *after_seq*."""
+        end = time.monotonic() + timeout
+        with self._cv:
+            while True:
+                result = b''
+                latest_seq = after_seq
+                for seq, data in self._chunks:
+                    if seq > after_seq:
+                        result += data
+                        latest_seq = seq
+                if result:
+                    return (latest_seq, result)
+                remaining = end - time.monotonic()
+                if remaining <= 0:
+                    return (after_seq, b'')
+                self._cv.wait(timeout=remaining)
+
+
 class WebVideoNode(Node):
-    def __init__(self, frame_buffer: FrameBuffer, front_frame_buffer: FrameBuffer = None) -> None:
+    def __init__(self, frame_buffer: FrameBuffer, front_frame_buffer: FrameBuffer = None, audio_buffer: AudioBuffer = None) -> None:
         super().__init__("web_video")
 
         self.declare_parameter("topic", "image_raw/compressed")
@@ -1205,6 +1367,22 @@ class WebVideoNode(Node):
         self._rotate_timer = self.create_timer(0.05, self._rotate_tick)
 
         self.get_logger().info(f"IMU topics: data={imu_data_topic}, yaw={imu_yaw_topic}, cal={imu_cal_topic}")
+
+        # ── Audio streaming ─────────────────────────────────────────
+        self.declare_parameter("imu_audio_topic", "imu/audio")
+        self.declare_parameter("imu_audio_enable_topic", "imu/audio_enable")
+
+        imu_audio_topic = str(self.get_parameter("imu_audio_topic").value)
+        imu_audio_enable_topic = str(self.get_parameter("imu_audio_enable_topic").value)
+
+        self._audio_buffer = audio_buffer
+        self._audio_enabled = False
+
+        self._audio_sub = self.create_subscription(
+            UInt8MultiArray, imu_audio_topic, self._on_audio, 10
+        )
+        self._audio_enable_pub = self.create_publisher(Bool, imu_audio_enable_topic, 10)
+        self.get_logger().info(f"Audio topics: data={imu_audio_topic}, enable={imu_audio_enable_topic}")
 
     @staticmethod
     def _clamp(x: float, lo: float, hi: float) -> float:
@@ -1496,6 +1674,26 @@ class WebVideoNode(Node):
         self._imu_calibrate_pub.publish(msg)
         self.get_logger().info("IMU calibration requested via web UI")
 
+    # ── Audio streaming ─────────────────────────────────────────
+
+    def _on_audio(self, msg: UInt8MultiArray) -> None:
+        if self._audio_buffer is not None and msg.data:
+            self._audio_buffer.push(bytes(msg.data))
+
+    def audio_enable(self) -> None:
+        msg = Bool()
+        msg.data = True
+        self._audio_enable_pub.publish(msg)
+        self._audio_enabled = True
+        self.get_logger().info("Audio streaming enabled via web UI")
+
+    def audio_disable(self) -> None:
+        msg = Bool()
+        msg.data = False
+        self._audio_enable_pub.publish(msg)
+        self._audio_enabled = False
+        self.get_logger().info("Audio streaming disabled via web UI")
+
     # ── Rotate-to-angle controller ────────────────────────────────────
 
     def start_rotate(self, target_deg: float, speed: float = 0.5) -> None:
@@ -1599,6 +1797,9 @@ def make_handler(
     imu_calibrate=None,
     rotate_starter=None,
     rotate_stopper=None,
+    audio_buffer=None,
+    audio_enabler=None,
+    audio_disabler=None,
 ):
     boundary = b"--frame"
     fps = max(float(fps_limit), 1.0)
@@ -1844,6 +2045,42 @@ def make_handler(
                 except Exception as e:
                     if logger is not None:
                         logger.warn(f"front stream client error: {e!r}")
+                    return
+
+            if path.startswith("/stream_audio"):
+                if audio_buffer is None:
+                    self.send_response(HTTPStatus.SERVICE_UNAVAILABLE)
+                    self.send_header("Content-Type", "text/plain; charset=utf-8")
+                    self.end_headers()
+                    self.wfile.write(b"Audio not available\n")
+                    return
+
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Cache-Control", "no-cache, private")
+                self.send_header("X-Audio-Sample-Rate", "8000")
+                self.send_header("X-Audio-Format", "u8")
+                self.send_header("X-Audio-Channels", "1")
+                self.end_headers()
+                try:
+                    self.wfile.flush()
+                except Exception:
+                    pass
+
+                last_seq = -1
+                try:
+                    while True:
+                        seq, data = audio_buffer.get_newer(last_seq, timeout=2.0)
+                        if not data:
+                            continue
+                        last_seq = seq
+                        self.wfile.write(data)
+                        self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    return
+                except Exception as e:
+                    if logger is not None:
+                        logger.warn(f"audio stream client error: {e!r}")
                     return
 
             self.send_response(HTTPStatus.NOT_FOUND)
@@ -2242,6 +2479,26 @@ def make_handler(
                 self.end_headers()
                 return
 
+            if path == '/api/audio/enable':
+                if callable(audio_enabler):
+                    try:
+                        audio_enabler()
+                    except Exception:
+                        pass
+                self.send_response(HTTPStatus.NO_CONTENT)
+                self.end_headers()
+                return
+
+            if path == '/api/audio/disable':
+                if callable(audio_disabler):
+                    try:
+                        audio_disabler()
+                    except Exception:
+                        pass
+                self.send_response(HTTPStatus.NO_CONTENT)
+                self.end_headers()
+                return
+
             self.send_response(HTTPStatus.NOT_FOUND)
             self.send_header('Content-Type', 'text/plain; charset=utf-8')
             self.end_headers()
@@ -2254,7 +2511,8 @@ def main() -> None:
     rclpy.init()
     frame_buffer = FrameBuffer()
     front_frame_buffer = FrameBuffer()
-    node = WebVideoNode(frame_buffer, front_frame_buffer)
+    audio_buffer = AudioBuffer()
+    node = WebVideoNode(frame_buffer, front_frame_buffer, audio_buffer)
 
     bind = str(node.get_parameter("bind").value)
     port = int(node.get_parameter("port").value)
@@ -2288,6 +2546,9 @@ def main() -> None:
         imu_calibrate=node.imu_calibrate,
         rotate_starter=node.start_rotate,
         rotate_stopper=node.stop_rotate,
+        audio_buffer=audio_buffer,
+        audio_enabler=node.audio_enable,
+        audio_disabler=node.audio_disable,
     )
     httpd = ThreadingHTTPServer((bind, port), handler_cls)
     # Allow the serve loop to wake up periodically so Ctrl-C / rclpy shutdown is responsive.
