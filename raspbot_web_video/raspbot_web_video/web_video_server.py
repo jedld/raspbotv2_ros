@@ -1121,9 +1121,10 @@ class WebVideoNode(Node):
         self.declare_parameter("imu_temperature_topic", "imu/temperature")
         self.declare_parameter("imu_mic_topic", "imu/mic_level")
         # Rotate-to-angle controller params
-        self.declare_parameter("rotate_kp", 2.5)       # proportional gain (rad/s per degree of error)
+        self.declare_parameter("rotate_kp", 1.8)       # proportional gain
+        self.declare_parameter("rotate_kd", 0.3)       # derivative gain (damping via gyro yaw rate)
         self.declare_parameter("rotate_tolerance_deg", 2.0)
-        self.declare_parameter("rotate_settle_sec", 0.3)
+        self.declare_parameter("rotate_settle_sec", 0.5)
 
         imu_data_topic = str(self.get_parameter("imu_data_topic").value)
         imu_yaw_topic = str(self.get_parameter("imu_yaw_topic").value)
@@ -1145,6 +1146,7 @@ class WebVideoNode(Node):
         self._rotate_target_deg = None
         self._rotate_speed = 0.5
         self._rotate_kp = float(self.get_parameter("rotate_kp").value)
+        self._rotate_kd = float(self.get_parameter("rotate_kd").value)
         self._rotate_tolerance = float(self.get_parameter("rotate_tolerance_deg").value)
         self._rotate_settle_sec = float(self.get_parameter("rotate_settle_sec").value)
         self._rotate_in_tolerance_since = None
@@ -1483,18 +1485,25 @@ class WebVideoNode(Node):
         else:
             self._rotate_in_tolerance_since = None
 
-        # Proportional controller: angular velocity = Kp * error
-        # Cap at rotate_speed (which is 0..1 unit), then scale by max_angular_rps
-        raw_cmd = self._rotate_kp * error  # °/s-ish
-        # Convert error in degrees to a proportional output, cap at ±speed
-        # Kp=2.5 means at 10° error → 25°/s command, which we then map to unit
-        angular_unit = raw_cmd / 180.0  # normalize to rough ±1 range
+        # PD controller: use gyro yaw-rate (°/s) as derivative for damping
+        yaw_rate = self._imu_gyro[2]  # °/s from IMU (already converted)
+
+        p_term = self._rotate_kp * error           # proportional
+        d_term = -self._rotate_kd * yaw_rate        # derivative (damping)
+        raw_cmd = p_term + d_term
+
+        # Normalize to ±1 range and clamp to requested speed
+        angular_unit = raw_cmd / 180.0
         angular_unit = max(-self._rotate_speed, min(self._rotate_speed, angular_unit))
 
-        # Ensure minimum rotation when error is significant but output would be tiny
-        min_unit = 0.12
-        if abs(error) > self._rotate_tolerance and abs(angular_unit) < min_unit:
+        # Gentle minimum nudge only when far from target and nearly stalled
+        min_unit = 0.08
+        if abs(error) > self._rotate_tolerance * 2.0 and abs(angular_unit) < min_unit:
             angular_unit = min_unit if error > 0 else -min_unit
+
+        # Dead-zone: if error is small and output is tiny, just stop
+        if abs(error) < self._rotate_tolerance * 1.5 and abs(angular_unit) < min_unit:
+            angular_unit = 0.0
 
         msg = Twist()
         msg.angular.z = float(angular_unit) * float(self._max_angular_rps)
