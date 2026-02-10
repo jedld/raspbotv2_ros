@@ -90,44 +90,84 @@ class PiCameraNode(Node):
     # ── Backend initialisation helpers ────────────────────────────────
 
     def _try_gstreamer(self) -> bool:
-        """Try OpenCV capture via GStreamer libcamerasrc pipeline."""
+        """Try OpenCV capture via GStreamer libcamerasrc pipeline.
+
+        On Pi 5 with PiSP, libcamerasrc auto-negotiates the sensor
+        format internally.  We let it choose the best raw mode, then
+        use videoconvert + videoscale to deliver the requested BGR
+        resolution to the OpenCV appsink.
+        """
         try:
             cv2 = self._cv2
-            pipeline = (
-                f'libcamerasrc camera-name="/base/axi/pcie@120000/rp1/i2c@80000/imx708@1a" ! '
-                f'video/x-raw,width={self._width},height={self._height},'
-                f'framerate={int(self._fps)}/1 ! '
-                f'videoconvert ! appsink drop=true sync=false'
-            )
-            self.get_logger().info(f'Pi Camera: trying GStreamer pipeline: {pipeline}')
-            cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
-            if cap.isOpened():
-                # Verify we can actually read a frame
-                ok, _ = cap.read()
-                if ok:
-                    self._cap = cap
-                    self._capture_method = 'gstreamer'
-                    return True
-                cap.release()
-            # Try generic libcamerasrc (no camera-name filter)
-            pipeline_generic = (
+
+            # Discover the IMX708 camera-name from /dev/media*
+            camera_name = self._discover_libcamera_name()
+
+            pipelines_to_try = []
+
+            # Pipeline 1: explicit camera-name with auto-negotiation
+            if camera_name:
+                pipelines_to_try.append(
+                    f'libcamerasrc camera-name="{camera_name}" ! '
+                    f'videoconvert ! videoscale ! '
+                    f'video/x-raw,format=BGR,width={self._width},'
+                    f'height={self._height} ! '
+                    f'appsink drop=true sync=false'
+                )
+
+            # Pipeline 2: generic libcamerasrc (auto camera)
+            pipelines_to_try.append(
                 f'libcamerasrc ! '
-                f'video/x-raw,width={self._width},height={self._height},'
-                f'framerate={int(self._fps)}/1 ! '
-                f'videoconvert ! appsink drop=true sync=false'
+                f'videoconvert ! videoscale ! '
+                f'video/x-raw,format=BGR,width={self._width},'
+                f'height={self._height} ! '
+                f'appsink drop=true sync=false'
             )
-            self.get_logger().info(f'Pi Camera: trying generic GStreamer pipeline')
-            cap = cv2.VideoCapture(pipeline_generic, cv2.CAP_GSTREAMER)
-            if cap.isOpened():
-                ok, _ = cap.read()
-                if ok:
-                    self._cap = cap
-                    self._capture_method = 'gstreamer'
-                    return True
-                cap.release()
+
+            for pipeline in pipelines_to_try:
+                self.get_logger().info(
+                    f'Pi Camera: trying GStreamer pipeline: {pipeline}'
+                )
+                cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
+                if cap.isOpened():
+                    ok, _ = cap.read()
+                    if ok:
+                        self._cap = cap
+                        self._capture_method = 'gstreamer'
+                        return True
+                    cap.release()
         except Exception as e:
             self.get_logger().warn(f'Pi Camera: GStreamer init failed: {e}')
         return False
+
+    @staticmethod
+    def _discover_libcamera_name() -> str:
+        """Return the device-tree path of the first CSI camera, or ''."""
+        import glob
+        import os
+        for media in sorted(glob.glob('/sys/bus/media/devices/media*')):
+            model_path = os.path.join(media, 'model')
+            try:
+                model = open(model_path).read().strip()
+            except OSError:
+                continue
+            if model == 'rp1-cfe':
+                # Walk sub-entities looking for an imx708 sensor
+                for entity in sorted(glob.glob(os.path.join(media, 'device', 'v4l-subdev*'))):
+                    name_path = os.path.join(entity, 'name')
+                    try:
+                        name = open(name_path).read().strip()
+                    except OSError:
+                        continue
+                    if 'imx708' in name.lower():
+                        # Resolve the DT path from of_node
+                        of_node = os.path.join(entity, 'of_node')
+                        if os.path.islink(of_node):
+                            dt = os.path.realpath(of_node)
+                            # Strip the /proc/device-tree prefix
+                            dt = dt.replace('/proc/device-tree', '')
+                            return dt
+        return ''
 
     def _try_v4l2(self) -> bool:
         """Try OpenCV capture via V4L2 on a specific device index."""
