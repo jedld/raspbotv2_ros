@@ -76,8 +76,9 @@
 static volatile int     g_mic_rms      = 0;
 static int16_t          g_mic_buf[MIC_BUF_SAMPLES];
 
-static float  g_gyro_offset[3] = {0.0f, 0.0f, 0.0f};
-static bool   g_calibrated     = false;
+static float  g_gyro_offset[3]  = {0.0f, 0.0f, 0.0f};
+static float  g_accel_offset[3] = {0.0f, 0.0f, 0.0f};  // gravity-subtracted rest bias
+static bool   g_calibrated      = false;
 
 static unsigned long    g_interval_us  = 1000000UL / DEFAULT_HZ;
 static unsigned long    g_last_send_us = 0;
@@ -117,8 +118,9 @@ void setRGB(uint8_t r, uint8_t g, uint8_t b) {
 void calibrateGyro() {
   setRGB(255, 165, 0);  // orange while calibrating
 
-  float sx = 0, sy = 0, sz = 0;
-  int   n  = 0;
+  float sx = 0, sy = 0, sz = 0;   // gyro sums
+  float sax = 0, say = 0, saz = 0; // accel sums
+  int   ng = 0, na = 0;
   unsigned long start = millis();
 
   Serial.println("$CAL,start");
@@ -129,26 +131,48 @@ void calibrateGyro() {
       sx += gx;
       sy += gy;
       sz += gz;
-      n++;
+      ng++;
+    }
+    float ax, ay, az;
+    if (IMU.accelerationAvailable() && IMU.readAcceleration(ax, ay, az)) {
+      sax += ax;
+      say += ay;
+      saz += az;
+      na++;
     }
     delay(5);
   }
 
-  if (n > 0) {
-    g_gyro_offset[0] = sx / n;
-    g_gyro_offset[1] = sy / n;
-    g_gyro_offset[2] = sz / n;
+  if (ng > 0) {
+    g_gyro_offset[0] = sx / ng;
+    g_gyro_offset[1] = sy / ng;
+    g_gyro_offset[2] = sz / ng;
     g_calibrated = true;
   }
 
+  // Accel offset: at rest the only force should be +1g on the board Z axis.
+  // Any residual on X/Y is mounting tilt; the Z residual is (mean_az - 1.0).
+  if (na > 0) {
+    g_accel_offset[0] = sax / na;          // ideally 0 if level
+    g_accel_offset[1] = say / na;          // ideally 0 if level
+    g_accel_offset[2] = (saz / na) - 1.0f; // subtract expected 1g
+  }
+
+  // Report: $CAL,done,<n_gyro>,<gx_off>,<gy_off>,<gz_off>,<ax_off>,<ay_off>,<az_off>
   Serial.print("$CAL,done,");
-  Serial.print(n);
+  Serial.print(ng);
   Serial.print(",");
   Serial.print(g_gyro_offset[0], 4);
   Serial.print(",");
   Serial.print(g_gyro_offset[1], 4);
   Serial.print(",");
-  Serial.println(g_gyro_offset[2], 4);
+  Serial.print(g_gyro_offset[2], 4);
+  Serial.print(",");
+  Serial.print(g_accel_offset[0], 4);
+  Serial.print(",");
+  Serial.print(g_accel_offset[1], 4);
+  Serial.print(",");
+  Serial.println(g_accel_offset[2], 4);
 
   setRGB(0, 0, 0);  // off after calibration
 }
@@ -232,6 +256,10 @@ void loop() {
 
   if (IMU.accelerationAvailable()) {
     IMU.readAcceleration(ax, ay, az);
+    // Subtract mounting-tilt offsets (keeps 1g on Z)
+    ax -= g_accel_offset[0];
+    ay -= g_accel_offset[1];
+    az -= g_accel_offset[2];
   }
   if (IMU.gyroscopeAvailable()) {
     IMU.readGyroscope(gx, gy, gz);

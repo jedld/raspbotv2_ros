@@ -83,6 +83,8 @@ class ImuSerialNode(Node):
         self._running = True
         self._connected = False
         self._calibrated = False  # True after gyro calibration completes
+        # Accel bias from calibration (raw g units, pre-axis-remap)
+        self._accel_bias = [0.0, 0.0, 0.0]
 
         # ── Publishers ────────────────────────────────────────────────
         self._imu_pub = self.create_publisher(Imu, 'imu/data', 10)
@@ -168,6 +170,7 @@ class ImuSerialNode(Node):
                     'Sending gyro calibration (auto on connect) — hold robot still for 2 s'
                 )
                 self._publish_calibrated(False)
+                self._accel_bias = [0.0, 0.0, 0.0]
                 self._send_command('C')
                 # Actively read lines while waiting for $CAL,done (up to 5 s)
                 cal_deadline = time.monotonic() + 5.0
@@ -187,6 +190,7 @@ class ImuSerialNode(Node):
                     if line.startswith('$CAL,'):
                         self.get_logger().info(f'Arduino: {line}')
                         if 'done' in line:
+                            self._parse_cal_offsets(line)
                             cal_ok = True
                             self._calibrated = True
                             self._publish_calibrated(True)
@@ -225,12 +229,32 @@ class ImuSerialNode(Node):
             elif line.startswith('$CAL,'):
                 self.get_logger().info(f'Arduino: {line}')
                 if 'done' in line:
+                    self._parse_cal_offsets(line)
                     self._yaw_deg = 0.0
                     self._calibrated = True
                     self._publish_calibrated(True)
                     self.get_logger().info('Gyro calibration complete — IMU data is now valid')
             elif line.startswith('$INFO,') or line.startswith('$ERR,'):
                 self.get_logger().info(f'Arduino: {line}')
+
+    def _parse_cal_offsets(self, line: str) -> None:
+        """Extract accel offsets from $CAL,done,<ng>,<gx>,<gy>,<gz>,<ax>,<ay>,<az>."""
+        parts = line.split(',')
+        # New firmware: 8+ fields; old firmware: 5 fields (no accel offsets)
+        if len(parts) >= 8:
+            try:
+                abx = float(parts[5])
+                aby = float(parts[6])
+                abz = float(parts[7])
+                self._accel_bias = [abx, aby, abz]
+                self.get_logger().info(
+                    f'Accel bias from calibration: '
+                    f'X={abx:+.4f}g  Y={aby:+.4f}g  Z={abz:+.4f}g'
+                )
+            except (ValueError, IndexError):
+                self.get_logger().warn('Could not parse accel offsets from $CAL line')
+        else:
+            self.get_logger().info('Firmware did not report accel offsets (old format)')
 
     def _parse_imu(self, line: str) -> None:
         # $IMU,ax,ay,az,gx,gy,gz,temp,mic,ms

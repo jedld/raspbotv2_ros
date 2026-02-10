@@ -3,9 +3,10 @@ import time
 
 import rclpy
 from geometry_msgs.msg import Twist
+from rcl_interfaces.msg import SetParametersResult
 from rclpy.node import Node
 from sensor_msgs.msg import Imu
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, Float64
 
 from .i2c_car import I2CCar
 
@@ -65,6 +66,34 @@ class MotorDriverNode(Node):
         # i.e. heading-hold only engages when the user is driving "straight"
         self.declare_parameter('gyro_heading_hold_deadband_rad', 0.05)
 
+        # Extended PID gains (upgrade P-only heading-hold to full PID)
+        self.declare_parameter('gyro_heading_hold_ki', 1.5)
+        self.declare_parameter('gyro_heading_hold_kd', 0.8)
+        self.declare_parameter('gyro_heading_hold_integral_max', 20.0)
+        self.declare_parameter('imu_yaw_topic', 'imu/yaw_deg')
+        # Correction sign: set to -1.0 if the heading-hold makes drift WORSE.
+        # This flips the entire PID output without touching IMU axis config.
+        self.declare_parameter('heading_hold_sign', 1.0)
+        # Diagnostic log interval (seconds). 0 disables.
+        self.declare_parameter('heading_hold_diag_interval_sec', 2.0)
+
+        # Adaptive motor trim: learns L/R asymmetry from sustained corrections
+        self.declare_parameter('motor_trim_adapt_enable', True)
+        self.declare_parameter('motor_trim_adapt_rate', 0.10)  # PWM/s
+        self.declare_parameter('motor_trim_max', 15.0)
+
+        # Per-motor manual trim offsets (added to PWM; positive = more PWM)
+        self.declare_parameter('trim_fl', 0.0)
+        self.declare_parameter('trim_fr', 0.0)
+        self.declare_parameter('trim_rl', 0.0)
+        self.declare_parameter('trim_rr', 0.0)
+
+        # Lateral drift correction via accelerometer (mecanum only)
+        self.declare_parameter('lateral_drift_correction_enable', False)
+        self.declare_parameter('lateral_drift_gain', 3.0)
+        self.declare_parameter('lateral_drift_max_correction', 8.0)
+        self.declare_parameter('lateral_drift_alpha', 0.05)
+
         i2c_bus = int(self.get_parameter('i2c_bus').value)
         i2c_addr = int(self.get_parameter('i2c_addr').value)
         i2c_protocol = str(self.get_parameter('i2c_protocol').value)
@@ -110,6 +139,40 @@ class MotorDriverNode(Node):
         self._cmd_angular_z = 0.0  # latest commanded angular.z from cmd_vel
         self._imu_calibrated = False  # gated until imu/calibrated is True
 
+        # PID extended state
+        self._heading_hold_ki = float(self.get_parameter('gyro_heading_hold_ki').value)
+        self._heading_hold_kd = float(self.get_parameter('gyro_heading_hold_kd').value)
+        self._heading_integral_max = float(self.get_parameter('gyro_heading_hold_integral_max').value)
+        self._heading_hold_sign = float(self.get_parameter('heading_hold_sign').value)
+        self._heading_integral = 0.0
+        self._heading_target_deg = None  # captured on transition to straight driving
+        self._imu_yaw_deg = 0.0
+        self._last_heading_hold_time = None
+        # Diagnostic logging
+        self._diag_interval = float(self.get_parameter('heading_hold_diag_interval_sec').value)
+        self._last_diag_time = 0.0
+        self._heading_error_deg = 0.0  # stashed for diagnostics
+
+        # Adaptive motor trim
+        self._trim_adapt_enable = bool(self.get_parameter('motor_trim_adapt_enable').value)
+        self._trim_adapt_rate = float(self.get_parameter('motor_trim_adapt_rate').value)
+        self._trim_max = float(self.get_parameter('motor_trim_max').value)
+        self._adapted_trim = 0.0  # learned L-R bias (pos = left needs more PWM)
+
+        # Per-motor manual trim
+        self._trim_fl = float(self.get_parameter('trim_fl').value)
+        self._trim_fr = float(self.get_parameter('trim_fr').value)
+        self._trim_rl = float(self.get_parameter('trim_rl').value)
+        self._trim_rr = float(self.get_parameter('trim_rr').value)
+
+        # Lateral drift correction
+        self._lateral_drift_enable = bool(self.get_parameter('lateral_drift_correction_enable').value)
+        self._lateral_drift_gain = float(self.get_parameter('lateral_drift_gain').value)
+        self._lateral_drift_max = float(self.get_parameter('lateral_drift_max_correction').value)
+        self._lateral_drift_alpha = float(self.get_parameter('lateral_drift_alpha').value)
+        self._lateral_accel_filtered = 0.0
+        self._lateral_correction = 0.0
+
         self._car = I2CCar(i2c_bus=i2c_bus, i2c_addr=i2c_addr, dry_run=dry_run, protocol=i2c_protocol)
 
         self._last_cmd_time = None
@@ -128,15 +191,32 @@ class MotorDriverNode(Node):
         self.create_subscription(Twist, 'cmd_vel', self._on_cmd_vel, 10)
         self._timer = self.create_timer(0.02, self._tick)  # 50Hz
 
-        # ── IMU subscription for heading-hold ─────────────────────────
+        # ── IMU subscriptions for heading-hold ────────────────────────
         if self._heading_hold_enable:
             self.create_subscription(Imu, self._imu_topic, self._on_imu, 10)
             self.create_subscription(Bool, 'imu/calibrated', self._on_imu_calibrated, 10)
+            imu_yaw_topic = str(self.get_parameter('imu_yaw_topic').value)
+            self.create_subscription(Float64, imu_yaw_topic, self._on_imu_yaw, 10)
             self.get_logger().info(
-                f'Gyro heading-hold ENABLED (gain={self._heading_hold_gain}, '
+                f'PID heading-hold ENABLED (Kp={self._heading_hold_gain}, '
+                f'Ki={self._heading_hold_ki}, Kd={self._heading_hold_kd}, '
+                f'sign={self._heading_hold_sign:+.0f}, '
                 f'max_corr={self._heading_hold_max}, deadband={self._heading_hold_deadband} rad/s). '
                 f'Waiting for IMU calibration...'
             )
+            if self._trim_adapt_enable:
+                self.get_logger().info(
+                    f'Adaptive motor trim ENABLED (rate={self._trim_adapt_rate} PWM/s, '
+                    f'max={self._trim_max})'
+                )
+            if any(abs(t) > 0.01 for t in (self._trim_fl, self._trim_fr, self._trim_rl, self._trim_rr)):
+                self.get_logger().info(
+                    f'Manual motor trim: FL={self._trim_fl:+.1f} FR={self._trim_fr:+.1f} '
+                    f'RL={self._trim_rl:+.1f} RR={self._trim_rr:+.1f}'
+                )
+
+        # Live-tuning: allow key parameters to be changed at runtime
+        self.add_on_set_parameters_callback(self._on_param_change)
 
         if dry_run:
             self.get_logger().warn('Motor driver running in dry_run mode (no I2C writes).')
@@ -174,44 +254,161 @@ class MotorDriverNode(Node):
                 'strafe will be ignored and controller will behave like differential.'
             )
 
+    # ── Live parameter tuning ────────────────────────────────────────
+    _TUNABLE_PARAMS = {
+        'heading_hold_sign': '_heading_hold_sign',
+        'gyro_heading_hold_gain': '_heading_hold_gain',
+        'gyro_heading_hold_ki': '_heading_hold_ki',
+        'gyro_heading_hold_kd': '_heading_hold_kd',
+        'gyro_heading_hold_max_correction': '_heading_hold_max',
+        'gyro_heading_hold_deadband_rad': '_heading_hold_deadband',
+        'trim_fl': '_trim_fl',
+        'trim_fr': '_trim_fr',
+        'trim_rl': '_trim_rl',
+        'trim_rr': '_trim_rr',
+    }
+
+    def _on_param_change(self, params) -> SetParametersResult:
+        for p in params:
+            attr = self._TUNABLE_PARAMS.get(p.name)
+            if attr is not None:
+                setattr(self, attr, float(p.value))
+                self.get_logger().info(f'[live-tune] {p.name} = {p.value}')
+        return SetParametersResult(successful=True)
+
     def _on_imu_calibrated(self, msg: Bool) -> None:
         was = self._imu_calibrated
         self._imu_calibrated = msg.data
         if msg.data and not was:
-            self.get_logger().info('IMU calibrated — gyro heading-hold is now active')
+            self.get_logger().info('IMU calibrated — PID heading-hold is now active')
         elif not msg.data and was:
             self.get_logger().warn('IMU calibration lost — heading-hold suspended')
             self._gyro_correction = 0.0
+            self._heading_integral = 0.0
+            self._heading_target_deg = None
+            self._last_heading_hold_time = None
+            self._lateral_accel_filtered = 0.0
+            self._lateral_correction = 0.0
+
+    def _on_imu_yaw(self, msg: Float64) -> None:
+        """Receive integrated heading from IMU node."""
+        self._imu_yaw_deg = msg.data
 
     def _on_imu(self, msg: Imu) -> None:
-        """Receive gyro data and compute heading-hold correction."""
+        """PID heading-hold + lateral drift correction using IMU data."""
         self._gyro_yaw_rate = msg.angular_velocity.z  # rad/s
+        accel_y = msg.linear_acceleration.y            # lateral m/s²
 
-        # Don't apply corrections until IMU is calibrated
+        # ── Gate: wait for calibration ────────────────────────────────
         if not self._imu_calibrated:
             self._gyro_correction = 0.0
+            self._heading_integral = 0.0
+            self._heading_target_deg = None
+            self._lateral_accel_filtered = 0.0
+            self._lateral_correction = 0.0
             return
 
-        # Only apply heading-hold when the user wants to drive straight
-        # (commanded angular.z is near zero)
+        # ── Gate: user is intentionally turning ───────────────────────
         if abs(self._cmd_angular_z) > self._heading_hold_deadband:
-            # User is intentionally turning — don't fight it
             self._gyro_correction = 0.0
+            # Preserve integral — motor asymmetry is valid across headings
+            self._heading_target_deg = None
+            self._last_heading_hold_time = None
+            self._lateral_correction = 0.0
             return
 
-        # If robot isn't moving, no correction needed
+        # ── Gate: robot isn't moving ──────────────────────────────────
         if not self._is_any_motion_commanded():
             self._gyro_correction = 0.0
+            # Preserve integral — resumes instantly on next forward command
+            self._heading_target_deg = None
+            self._last_heading_hold_time = None
+            self._lateral_correction = 0.0
             return
 
-        # Proportional correction: if gyro says robot is drifting clockwise
-        # (negative yaw rate in ROS convention), add positive correction to
-        # steer left (slow right / speed up left).
-        # correction > 0 means "steer left", < 0 means "steer right"
-        raw_correction = -self._gyro_yaw_rate * RAD_TO_DEG * self._heading_hold_gain
+        now = time.time()
+
+        # ── Capture heading target on transition to straight driving ──
+        if self._heading_target_deg is None:
+            self._heading_target_deg = self._imu_yaw_deg
+            self._last_heading_hold_time = now
+            self.get_logger().debug(
+                f'Heading hold locked: target={self._heading_target_deg:.1f}°'
+            )
+            return
+
+        dt = now - self._last_heading_hold_time if self._last_heading_hold_time else 0.02
+        dt = min(dt, 0.1)  # safety cap
+        self._last_heading_hold_time = now
+
+        # ── Heading error (shortest path, degrees) ────────────────────
+        error = self._heading_target_deg - self._imu_yaw_deg
+        while error > 180.0:
+            error -= 360.0
+        while error < -180.0:
+            error += 360.0
+
+        # ── PID terms ─────────────────────────────────────────────────
+        # P: proportional to heading position error
+        p_term = self._heading_hold_gain * error
+
+        # I: accumulates to learn constant motor asymmetry
+        self._heading_integral += error * dt
+        self._heading_integral = clamp(
+            self._heading_integral,
+            -self._heading_integral_max,
+            self._heading_integral_max,
+        )
+        i_term = self._heading_hold_ki * self._heading_integral
+
+        # D: damps oscillation using gyro yaw rate
+        yaw_rate_dps = self._gyro_yaw_rate * RAD_TO_DEG
+        d_term = -self._heading_hold_kd * yaw_rate_dps
+
+        # Apply correction sign (flip entire PID if IMU axis is inverted)
+        raw_correction = self._heading_hold_sign * (p_term + i_term + d_term)
         self._gyro_correction = clamp(
             raw_correction, -self._heading_hold_max, self._heading_hold_max
         )
+        self._heading_error_deg = error  # stash for diagnostics
+
+        # ── Adaptive trim: slowly extract DC bias from sustained correction
+        total_corr = self._gyro_correction + self._adapted_trim
+        if self._trim_adapt_enable and abs(total_corr) > 0.5:
+            adapt_step = self._trim_adapt_rate * dt
+            if total_corr > 0.5:
+                self._adapted_trim = min(
+                    self._adapted_trim + adapt_step, self._trim_max
+                )
+            elif total_corr < -0.5:
+                self._adapted_trim = max(
+                    self._adapted_trim - adapt_step, -self._trim_max
+                )
+
+        # ── Periodic diagnostic logging ───────────────────────────────
+        if self._diag_interval > 0.0 and (now - self._last_diag_time) >= self._diag_interval:
+            self._last_diag_time = now
+            self.get_logger().info(
+                f'[heading-hold] err={error:+.1f}° P={p_term:+.1f} '
+                f'I={i_term:+.1f} D={d_term:+.1f} → corr={self._gyro_correction:+.1f} '
+                f'trim={self._adapted_trim:+.1f} '
+                f'yaw={self._imu_yaw_deg:.1f}° target={self._heading_target_deg:.1f}° '
+                f'sign={self._heading_hold_sign:+.0f}'
+            )
+
+        # ── Lateral drift correction (accelerometer, mecanum) ─────────
+        if self._lateral_drift_enable:
+            alpha = self._lateral_drift_alpha
+            self._lateral_accel_filtered = (
+                alpha * accel_y + (1.0 - alpha) * self._lateral_accel_filtered
+            )
+            if abs(self._lateral_accel_filtered) > 0.15:  # m/s² threshold
+                raw_lat = -self._lateral_drift_gain * self._lateral_accel_filtered
+                self._lateral_correction = clamp(
+                    raw_lat, -self._lateral_drift_max, self._lateral_drift_max
+                )
+            else:
+                self._lateral_correction = 0.0
 
     def _on_cmd_vel(self, msg: Twist) -> None:
         vx = float(msg.linear.x)
@@ -356,14 +553,29 @@ class MotorDriverNode(Node):
                 rl = self._apply_startup_kick(self._rl_pwm) if kick_active else self._rl_pwm
                 rr = self._apply_startup_kick(self._rr_pwm) if kick_active else self._rr_pwm
 
-                # ── Gyro heading-hold correction ──────────────────────
-                # correction > 0  → steer left → speed up left wheels, slow right
-                if self._heading_hold_enable and abs(self._gyro_correction) > 0.01:
-                    c = self._gyro_correction
-                    fl = clamp(fl + c, -self._max_pwm, self._max_pwm)
-                    rl = clamp(rl + c, -self._max_pwm, self._max_pwm)
-                    fr = clamp(fr - c, -self._max_pwm, self._max_pwm)
-                    rr = clamp(rr - c, -self._max_pwm, self._max_pwm)
+                # ── IMU corrections ───────────────────────────────────
+                if self._heading_hold_enable:
+                    # PID heading-hold + adaptive trim (yaw correction)
+                    c = self._gyro_correction + self._adapted_trim
+                    if abs(c) > 0.01:
+                        fl = clamp(fl + c, -self._max_pwm, self._max_pwm)
+                        rl = clamp(rl + c, -self._max_pwm, self._max_pwm)
+                        fr = clamp(fr - c, -self._max_pwm, self._max_pwm)
+                        rr = clamp(rr - c, -self._max_pwm, self._max_pwm)
+
+                    # Lateral drift correction (mecanum strafe offset)
+                    lc = self._lateral_correction
+                    if abs(lc) > 0.01:
+                        fl = clamp(fl - lc, -self._max_pwm, self._max_pwm)
+                        fr = clamp(fr + lc, -self._max_pwm, self._max_pwm)
+                        rl = clamp(rl + lc, -self._max_pwm, self._max_pwm)
+                        rr = clamp(rr - lc, -self._max_pwm, self._max_pwm)
+
+                # Per-motor manual trim (always applied)
+                fl = clamp(fl + self._trim_fl, -self._max_pwm, self._max_pwm)
+                fr = clamp(fr + self._trim_fr, -self._max_pwm, self._max_pwm)
+                rl = clamp(rl + self._trim_rl, -self._max_pwm, self._max_pwm)
+                rr = clamp(rr + self._trim_rr, -self._max_pwm, self._max_pwm)
 
                 self._car.set_motor_pwms(
                     fl,
@@ -380,11 +592,19 @@ class MotorDriverNode(Node):
                 left = self._apply_startup_kick(self._left_pwm) if kick_active else self._left_pwm
                 right = self._apply_startup_kick(self._right_pwm) if kick_active else self._right_pwm
 
-                # ── Gyro heading-hold correction (differential) ───────
-                if self._heading_hold_enable and abs(self._gyro_correction) > 0.01:
-                    c = self._gyro_correction
-                    left = clamp(left + c, -self._max_pwm, self._max_pwm)
-                    right = clamp(right - c, -self._max_pwm, self._max_pwm)
+                # ── IMU corrections (differential) ────────────────────
+                if self._heading_hold_enable:
+                    c = self._gyro_correction + self._adapted_trim
+                    if abs(c) > 0.01:
+                        left = clamp(left + c, -self._max_pwm, self._max_pwm)
+                        right = clamp(right - c, -self._max_pwm, self._max_pwm)
+
+                # Per-motor trim (applied as left/right offset)
+                lt = 0.5 * (self._trim_fl + self._trim_rl)
+                rt = 0.5 * (self._trim_fr + self._trim_rr)
+                if abs(lt) > 0.01 or abs(rt) > 0.01:
+                    left = clamp(left + lt, -self._max_pwm, self._max_pwm)
+                    right = clamp(right + rt, -self._max_pwm, self._max_pwm)
 
                 self._car.set_wheel_pwms(left, right, max_pwm=self._max_pwm)
             self._last_write_time = now
