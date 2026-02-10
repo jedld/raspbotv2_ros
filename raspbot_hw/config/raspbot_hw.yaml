@@ -81,6 +81,15 @@ motor_driver:
     lateral_drift_max_correction: 8.0
     lateral_drift_alpha: 0.05          # low-pass filter coefficient
 
+    # ── Collision failsafe (ultrasonic) ──────────────────────────────
+    # Blocks forward motion when the ultrasonic sensor detects an obstacle.
+    # Enabled by default.  Does NOT affect backward, strafe, or rotation.
+    collision_failsafe_enable: true
+    collision_stop_distance_m: 0.15    # hard stop (no forward motion)
+    collision_slow_distance_m: 0.35    # begin linear slow-down
+    collision_ultrasonic_topic: "ultrasonic/range"
+    collision_failsafe_timeout_sec: 1.0  # ignore stale data after this long
+
 ultrasonic:
   ros__parameters:
     # auto will use I2C distance registers on Pi5 (0x2B) and GPIO trig/echo on legacy.

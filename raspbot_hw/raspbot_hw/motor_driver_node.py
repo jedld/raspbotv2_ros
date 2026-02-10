@@ -5,7 +5,7 @@ import rclpy
 from geometry_msgs.msg import Twist
 from rcl_interfaces.msg import SetParametersResult
 from rclpy.node import Node
-from sensor_msgs.msg import Imu
+from sensor_msgs.msg import Imu, Range
 from std_msgs.msg import Bool, Float64
 
 from .i2c_car import I2CCar
@@ -94,6 +94,16 @@ class MotorDriverNode(Node):
         self.declare_parameter('lateral_drift_max_correction', 8.0)
         self.declare_parameter('lateral_drift_alpha', 0.05)
 
+        # ── Collision failsafe (ultrasonic) ───────────────────────────
+        # Enabled by default.  Blocks forward motion when ultrasonic range
+        # drops below collision_stop_distance_m.  Between stop and slow
+        # distances, forward speed is linearly scaled down.
+        self.declare_parameter('collision_failsafe_enable', True)
+        self.declare_parameter('collision_stop_distance_m', 0.15)   # hard stop
+        self.declare_parameter('collision_slow_distance_m', 0.35)   # begin slowdown
+        self.declare_parameter('collision_ultrasonic_topic', 'ultrasonic/range')
+        self.declare_parameter('collision_failsafe_timeout_sec', 1.0)  # stale data timeout
+
         i2c_bus = int(self.get_parameter('i2c_bus').value)
         i2c_addr = int(self.get_parameter('i2c_addr').value)
         i2c_protocol = str(self.get_parameter('i2c_protocol').value)
@@ -173,6 +183,17 @@ class MotorDriverNode(Node):
         self._lateral_accel_filtered = 0.0
         self._lateral_correction = 0.0
 
+        # ── Collision failsafe state ──────────────────────────────────
+        self._collision_enable = bool(self.get_parameter('collision_failsafe_enable').value)
+        self._collision_stop_dist = float(self.get_parameter('collision_stop_distance_m').value)
+        self._collision_slow_dist = float(self.get_parameter('collision_slow_distance_m').value)
+        self._collision_topic = str(self.get_parameter('collision_ultrasonic_topic').value)
+        self._collision_timeout = float(self.get_parameter('collision_failsafe_timeout_sec').value)
+        self._collision_distance = float('inf')  # latest ultrasonic reading (m)
+        self._collision_last_time = 0.0
+        self._collision_active = False  # True when forward motion is being blocked
+        self._collision_logged = False  # avoid log spam
+
         self._car = I2CCar(i2c_bus=i2c_bus, i2c_addr=i2c_addr, dry_run=dry_run, protocol=i2c_protocol)
 
         self._last_cmd_time = None
@@ -190,6 +211,30 @@ class MotorDriverNode(Node):
 
         self.create_subscription(Twist, 'cmd_vel', self._on_cmd_vel, 10)
         self._timer = self.create_timer(0.02, self._tick)  # 50Hz
+
+        # ── Collision failsafe subscription & publisher ───────────────
+        self._collision_enable_sub = self.create_subscription(
+            Bool, 'collision_failsafe/enable', self._on_collision_enable, 10
+        )
+        if self._collision_enable:
+            self.create_subscription(
+                Range, self._collision_topic, self._on_ultrasonic, 10
+            )
+            self._collision_active_pub = self.create_publisher(
+                Bool, 'collision_failsafe/active', 10
+            )
+            self.get_logger().info(
+                f'Collision failsafe ENABLED (stop={self._collision_stop_dist:.2f}m, '
+                f'slow={self._collision_slow_dist:.2f}m, topic={self._collision_topic})'
+            )
+        else:
+            self._collision_active_pub = self.create_publisher(
+                Bool, 'collision_failsafe/active', 10
+            )
+            self.create_subscription(
+                Range, self._collision_topic, self._on_ultrasonic, 10
+            )
+            self.get_logger().info('Collision failsafe DISABLED (can be enabled via topic or param)')
 
         # ── IMU subscriptions for heading-hold ────────────────────────
         if self._heading_hold_enable:
@@ -266,6 +311,11 @@ class MotorDriverNode(Node):
         'trim_fr': '_trim_fr',
         'trim_rl': '_trim_rl',
         'trim_rr': '_trim_rr',
+        'collision_stop_distance_m': '_collision_stop_dist',
+        'collision_slow_distance_m': '_collision_slow_dist',
+    }
+    _TUNABLE_BOOL_PARAMS = {
+        'collision_failsafe_enable': '_collision_enable',
     }
 
     def _on_param_change(self, params) -> SetParametersResult:
@@ -273,6 +323,10 @@ class MotorDriverNode(Node):
             attr = self._TUNABLE_PARAMS.get(p.name)
             if attr is not None:
                 setattr(self, attr, float(p.value))
+                self.get_logger().info(f'[live-tune] {p.name} = {p.value}')
+            bool_attr = self._TUNABLE_BOOL_PARAMS.get(p.name)
+            if bool_attr is not None:
+                setattr(self, bool_attr, bool(p.value))
                 self.get_logger().info(f'[live-tune] {p.name} = {p.value}')
         return SetParametersResult(successful=True)
 
@@ -410,11 +464,128 @@ class MotorDriverNode(Node):
             else:
                 self._lateral_correction = 0.0
 
+    # ── Collision failsafe ─────────────────────────────────────────
+    def _on_ultrasonic(self, msg: Range) -> None:
+        """Update obstacle distance from ultrasonic sensor."""
+        d = msg.range
+        if math.isnan(d) or math.isinf(d):
+            self._collision_distance = float('inf')
+        else:
+            self._collision_distance = max(d, 0.0)
+        self._collision_last_time = time.time()
+    def _on_collision_enable(self, msg: Bool) -> None:
+        """Enable/disable collision failsafe via topic (from web UI)."""
+        was = self._collision_enable
+        self._collision_enable = msg.data
+        if msg.data and not was:
+            self.get_logger().info(
+                f'Collision failsafe ENABLED via topic '
+                f'(stop={self._collision_stop_dist:.2f}m, slow={self._collision_slow_dist:.2f}m)'
+            )
+        elif not msg.data and was:
+            self.get_logger().info('Collision failsafe DISABLED via topic')
+            self._collision_active = False
+            self._collision_logged = False
+            if self._collision_active_pub:
+                b = Bool()
+                b.data = False
+                self._collision_active_pub.publish(b)
+    def _apply_collision_failsafe(self, vx: float) -> float:
+        """Clamp forward velocity based on ultrasonic distance.
+
+        Returns modified vx.  Backward motion (vx < 0) is never blocked.
+        """
+        if not self._collision_enable:
+            if self._collision_active:
+                self._collision_active = False
+                self._collision_logged = False
+                if self._collision_active_pub:
+                    b = Bool()
+                    b.data = False
+                    self._collision_active_pub.publish(b)
+            return vx
+
+        # If ultrasonic data is stale, don't block (sensor might be offline)
+        if (time.time() - self._collision_last_time) > self._collision_timeout:
+            if self._collision_active:
+                self._collision_active = False
+                self._collision_logged = False
+                if self._collision_active_pub:
+                    b = Bool()
+                    b.data = False
+                    self._collision_active_pub.publish(b)
+            return vx
+
+        # Only restrict forward motion (positive vx)
+        if vx <= 0.0:
+            was_active = self._collision_active
+            self._collision_active = False
+            if was_active:
+                self._collision_logged = False
+                if self._collision_active_pub:
+                    b = Bool()
+                    b.data = False
+                    self._collision_active_pub.publish(b)
+            return vx
+
+        dist = self._collision_distance
+        stop_d = self._collision_stop_dist
+        slow_d = self._collision_slow_dist
+
+        if dist <= stop_d:
+            # Hard stop — too close
+            if not self._collision_logged:
+                self.get_logger().warn(
+                    f'[collision-failsafe] STOP — obstacle at {dist:.2f}m '
+                    f'(threshold {stop_d:.2f}m)'
+                )
+                self._collision_logged = True
+            if not self._collision_active:
+                self._collision_active = True
+                if self._collision_active_pub:
+                    b = Bool()
+                    b.data = True
+                    self._collision_active_pub.publish(b)
+            return 0.0
+        elif dist < slow_d:
+            # Linear slow-down zone
+            scale = (dist - stop_d) / (slow_d - stop_d)
+            if not self._collision_active:
+                self._collision_active = True
+                if self._collision_active_pub:
+                    b = Bool()
+                    b.data = True
+                    self._collision_active_pub.publish(b)
+            if not self._collision_logged:
+                self.get_logger().info(
+                    f'[collision-failsafe] slowing — obstacle at {dist:.2f}m '
+                    f'(scale {scale:.0%})'
+                )
+                self._collision_logged = True
+            return vx * scale
+        else:
+            # Clear
+            was_active = self._collision_active
+            self._collision_active = False
+            if was_active:
+                self._collision_logged = False
+                self.get_logger().info('[collision-failsafe] clear')
+                if self._collision_active_pub:
+                    b = Bool()
+                    b.data = False
+                    self._collision_active_pub.publish(b)
+            elif self._collision_logged:
+                self._collision_logged = False
+            return vx
+
     def _on_cmd_vel(self, msg: Twist) -> None:
         vx = float(msg.linear.x)
         vy = float(getattr(msg.linear, 'y', 0.0))
         wz = float(msg.angular.z)
         self._cmd_angular_z = wz  # stash for heading-hold
+
+        # ── Apply collision failsafe before kinematics ────────────────
+        vx = self._apply_collision_failsafe(vx)
 
         if self._max_linear <= 0.0:
             self._left_pwm = 0.0

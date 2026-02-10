@@ -12,7 +12,7 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from geometry_msgs.msg import Vector3, Twist
-from sensor_msgs.msg import CompressedImage, Imu
+from sensor_msgs.msg import CompressedImage, Imu, Range
 from std_msgs.msg import Bool, Empty, Float32, Float64, Int32, Int32MultiArray, String, UInt8MultiArray
 
 
@@ -84,6 +84,19 @@ INDEX_HTML = """<!doctype html>
             <div class=\"row\" style=\"margin-top: 8px;\">
                 <div class=\"kv\">cmd_vel: <span id=\"cmdVel\">0, 0</span></div>
                 <div class=\"kv\">Safety: auto-stop on keyup / tab switch.</div>
+            </div>
+        </div>
+
+        <div class=\"card\" id=\"collisionCard\">
+            <h2>&#128721; Collision Failsafe</h2>
+            <p class=\"muted\">Ultrasonic-based forward-motion blocker. Protects all cmd_vel sources (WASD, auto-follow, teleop).</p>
+            <div class=\"row\">
+                <button class=\"danger\" id=\"collisionToggleBtn\">Disable Failsafe</button>
+                <div class=\"kv\">Status: <span id=\"collisionStatus\">unknown</span></div>
+                <div class=\"kv\">Distance: <span id=\"collisionDist\">—</span></div>
+            </div>
+            <div class=\"row\" style=\"margin-top: 4px;\">
+                <div class=\"kv\" style=\"font-size:12px;\">Stop &lt; 0.15 m &nbsp;|&nbsp; Slow 0.15–0.35 m &nbsp;|&nbsp; Clear &gt; 0.35 m</div>
             </div>
         </div>
 
@@ -161,6 +174,19 @@ INDEX_HTML = """<!doctype html>
             </div>
             <div class=\"row\" style=\"margin-top:6px;\">
                 <div class=\"kv\">Front cam: <span id=\"frontCamStatus\">loading…</span></div>
+            </div>
+        </div>
+
+        <div class=\"card\" id=\"depthCard\">
+            <h2>&#127912; Depth Map</h2>
+            <p class=\"muted\">Monocular depth estimation via Hailo-8 (fast_depth). Publishes on <code>depth/colorized/compressed</code>.</p>
+            <div class=\"row\">
+                <button class=\"primary\" id=\"depthToggleBtn\">Disable Depth</button>
+                <label class=\"kv\"><input id=\"depthShowChk\" type=\"checkbox\" checked /> Show depth stream</label>
+                <div class=\"kv\">Depth: <span id=\"depthStatus\">loading…</span></div>
+            </div>
+            <div id=\"depthStreamWrap\" style=\"position:relative;width:100%;max-width:640px;margin-top:8px;\">
+                <img id=\"depthVideo\" src=\"/stream_depth.mjpg\" alt=\"depth map stream\" style=\"width:100%;height:auto;background:#111;border-radius:8px;display:block;\" />
             </div>
         </div>
 
@@ -1002,6 +1028,9 @@ INDEX_HTML = """<!doctype html>
         // Front camera status
         const frontCamStatus = document.getElementById('frontCamStatus');
         const frontVideo = document.getElementById('frontVideo');
+        const ultrasonicDistText = document.getElementById('ultrasonicDistText');
+        const ultrasonicOverlay = document.getElementById('ultrasonicOverlay');
+        const ultrasonicWarnIcon = document.getElementById('ultrasonicWarnIcon');
         let frontCamOk = false;
         frontVideo.addEventListener('load', () => { frontCamOk = true; frontCamStatus.textContent = 'streaming'; });
         frontVideo.addEventListener('error', () => { frontCamOk = false; frontCamStatus.textContent = 'no stream'; });
@@ -1014,6 +1043,45 @@ INDEX_HTML = """<!doctype html>
                 frontCamStatus.style.color = '#b00';
             }
         }, 2000);
+
+        // Update ultrasonic overlay from collision failsafe status
+        function updateUltrasonicOverlay(cf) {
+            if (!cf) return;
+            const dist = cf.distance_m;
+            const active = cf.active;
+            const enabled = cf.enabled;
+            const stopD = 0.15, slowD = 0.35;
+
+            if (dist !== null && dist !== undefined && isFinite(dist)) {
+                ultrasonicDistText.textContent = dist.toFixed(2) + ' m';
+                if (active || dist <= stopD) {
+                    // Red — hard stop zone
+                    ultrasonicOverlay.style.background = 'rgba(180,0,0,0.85)';
+                    ultrasonicDistText.style.color = '#fff';
+                    ultrasonicWarnIcon.style.display = '';
+                } else if (dist < slowD) {
+                    // Orange — slow-down zone
+                    ultrasonicOverlay.style.background = 'rgba(200,120,0,0.85)';
+                    ultrasonicDistText.style.color = '#fff';
+                    ultrasonicWarnIcon.style.display = '';
+                } else {
+                    // Normal — clear
+                    ultrasonicOverlay.style.background = 'rgba(0,0,0,0.7)';
+                    ultrasonicDistText.style.color = '#fff';
+                    ultrasonicWarnIcon.style.display = 'none';
+                }
+            } else {
+                ultrasonicDistText.textContent = '— m';
+                ultrasonicOverlay.style.background = 'rgba(0,0,0,0.7)';
+                ultrasonicDistText.style.color = '#888';
+                ultrasonicWarnIcon.style.display = 'none';
+            }
+            if (!enabled) {
+                ultrasonicOverlay.style.opacity = '0.5';
+            } else {
+                ultrasonicOverlay.style.opacity = '1';
+            }
+        }
 
         // ──────────────────────────────────────────────────────────────
         // Microphone Streaming (Arduino PDM → 8 kHz unsigned 8-bit PCM)
@@ -1119,6 +1187,130 @@ INDEX_HTML = """<!doctype html>
             micStatusEl.style.color = '';
             micBufInfo.textContent = '-';
         }
+
+        // ──────────────────────────────────────────────────────────────
+        // Collision Failsafe
+        // ──────────────────────────────────────────────────────────────
+        const collisionToggleBtn = document.getElementById('collisionToggleBtn');
+        const collisionStatus = document.getElementById('collisionStatus');
+        const collisionDist = document.getElementById('collisionDist');
+        let collisionEnabled = true;
+
+        collisionToggleBtn.addEventListener('click', async () => {
+            if (collisionEnabled) {
+                try { await fetch('/api/collision_failsafe/disable', { method: 'POST' }); } catch(e) {}
+                collisionEnabled = false;
+                collisionToggleBtn.textContent = 'Enable Failsafe';
+                collisionToggleBtn.classList.remove('danger');
+                collisionToggleBtn.classList.add('primary');
+                collisionStatus.textContent = 'disabled';
+                collisionStatus.style.color = '#666';
+            } else {
+                try { await fetch('/api/collision_failsafe/enable', { method: 'POST' }); } catch(e) {}
+                collisionEnabled = true;
+                collisionToggleBtn.textContent = 'Disable Failsafe';
+                collisionToggleBtn.classList.remove('primary');
+                collisionToggleBtn.classList.add('danger');
+                collisionStatus.textContent = 'enabled';
+                collisionStatus.style.color = '#080';
+            }
+        });
+
+        // Poll collision status from /status endpoint
+        setInterval(async () => {
+            try {
+                const r = await fetch('/status');
+                const d = await r.json();
+                if (d.collision_failsafe) {
+                    const cf = d.collision_failsafe;
+                    const dist_m = cf.distance_m;
+                    if (dist_m !== null && dist_m !== undefined && isFinite(dist_m)) {
+                        collisionDist.textContent = dist_m.toFixed(2) + ' m';
+                    } else {
+                        collisionDist.textContent = '—';
+                    }
+                    if (cf.active) {
+                        collisionStatus.textContent = 'BLOCKING';
+                        collisionStatus.style.color = '#b00';
+                        collisionDist.style.color = '#b00';
+                    } else if (cf.enabled) {
+                        collisionStatus.textContent = 'clear';
+                        collisionStatus.style.color = '#080';
+                        collisionDist.style.color = '';
+                    } else {
+                        collisionStatus.textContent = 'disabled';
+                        collisionStatus.style.color = '#666';
+                        collisionDist.style.color = '#666';
+                    }
+                    // Sync toggle button state
+                    if (cf.enabled !== collisionEnabled) {
+                        collisionEnabled = cf.enabled;
+                        if (collisionEnabled) {
+                            collisionToggleBtn.textContent = 'Disable Failsafe';
+                            collisionToggleBtn.classList.remove('primary');
+                            collisionToggleBtn.classList.add('danger');
+                        } else {
+                            collisionToggleBtn.textContent = 'Enable Failsafe';
+                            collisionToggleBtn.classList.remove('danger');
+                            collisionToggleBtn.classList.add('primary');
+                        }
+                    }
+                    // Update front-camera ultrasonic overlay
+                    updateUltrasonicOverlay(cf);
+                }
+            } catch(e) {}
+        }, 500);
+
+        // ──────────────────────────────────────────────────────────────
+        // Depth Map (Hailo-8 fast_depth)
+        // ──────────────────────────────────────────────────────────────
+        const depthToggleBtn = document.getElementById('depthToggleBtn');
+        const depthShowChk = document.getElementById('depthShowChk');
+        const depthStatus = document.getElementById('depthStatus');
+        const depthStreamWrap = document.getElementById('depthStreamWrap');
+        const depthVideo = document.getElementById('depthVideo');
+        let depthEnabled = true;
+        let depthStreamOk = false;
+
+        depthVideo.addEventListener('load', () => { depthStreamOk = true; });
+        depthVideo.addEventListener('error', () => { depthStreamOk = false; });
+        setInterval(() => {
+            if (depthStreamOk && depthEnabled) {
+                depthStatus.textContent = 'streaming';
+                depthStatus.style.color = '#080';
+            } else if (!depthEnabled) {
+                depthStatus.textContent = 'disabled';
+                depthStatus.style.color = '#666';
+            } else {
+                depthStatus.textContent = 'no stream';
+                depthStatus.style.color = '#b00';
+            }
+        }, 2000);
+
+        depthToggleBtn.addEventListener('click', async () => {
+            if (depthEnabled) {
+                try { await fetch('/api/depth/disable', { method: 'POST' }); } catch(e) {}
+                depthEnabled = false;
+                depthVideo.src = '';
+                depthToggleBtn.textContent = 'Enable Depth';
+                depthToggleBtn.classList.remove('danger');
+                depthToggleBtn.classList.add('primary');
+            } else {
+                try { await fetch('/api/depth/enable', { method: 'POST' }); } catch(e) {}
+                depthEnabled = true;
+                depthVideo.src = '/stream_depth.mjpg';
+                depthToggleBtn.textContent = 'Disable Depth';
+                depthToggleBtn.classList.remove('primary');
+                depthToggleBtn.classList.add('danger');
+            }
+        });
+        // Start with button showing 'Disable' since depth starts enabled
+        depthToggleBtn.classList.remove('primary');
+        depthToggleBtn.classList.add('danger');
+
+        depthShowChk.addEventListener('change', () => {
+            depthStreamWrap.style.display = depthShowChk.checked ? '' : 'none';
+        });
     </script>
 </body>
 </html>
@@ -1194,7 +1386,7 @@ class AudioBuffer:
 
 
 class WebVideoNode(Node):
-    def __init__(self, frame_buffer: FrameBuffer, front_frame_buffer: FrameBuffer = None, audio_buffer: AudioBuffer = None) -> None:
+    def __init__(self, frame_buffer: FrameBuffer, front_frame_buffer: FrameBuffer = None, audio_buffer: AudioBuffer = None, depth_frame_buffer: FrameBuffer = None) -> None:
         super().__init__("web_video")
 
         self.declare_parameter("topic", "image_raw/compressed")
@@ -1384,6 +1576,53 @@ class WebVideoNode(Node):
         self._audio_enable_pub = self.create_publisher(Bool, imu_audio_enable_topic, 10)
         self.get_logger().info(f"Audio topics: data={imu_audio_topic}, enable={imu_audio_enable_topic}")
 
+        # ── Depth estimation integration ─────────────────────────────
+        self.declare_parameter("depth_colorized_topic", "depth/colorized/compressed")
+        self.declare_parameter("depth_enable_topic", "depth/enable")
+
+        depth_colorized_topic = str(self.get_parameter("depth_colorized_topic").value)
+        depth_enable_topic = str(self.get_parameter("depth_enable_topic").value)
+
+        self._depth_frame_buffer = depth_frame_buffer
+        self._depth_frame_count = 0
+        self._depth_enabled = True
+
+        if self._depth_frame_buffer is not None:
+            self._depth_sub = self.create_subscription(
+                CompressedImage, depth_colorized_topic, self._on_depth_img, qos_profile_sensor_data
+            )
+            self.get_logger().info(f"Depth colorized subscribing to {depth_colorized_topic}")
+        else:
+            self._depth_sub = None
+
+        self._depth_enable_pub = self.create_publisher(Bool, depth_enable_topic, 10)
+        self.get_logger().info(f"Depth enable topic: {depth_enable_topic}")
+
+        # ── Collision failsafe integration ────────────────────────────
+        self.declare_parameter("collision_failsafe_enable_topic", "collision_failsafe/enable")
+        self.declare_parameter("collision_failsafe_active_topic", "collision_failsafe/active")
+        self.declare_parameter("ultrasonic_range_topic", "ultrasonic/range")
+
+        cf_enable_topic = str(self.get_parameter("collision_failsafe_enable_topic").value)
+        cf_active_topic = str(self.get_parameter("collision_failsafe_active_topic").value)
+        us_range_topic = str(self.get_parameter("ultrasonic_range_topic").value)
+
+        self._collision_failsafe_enabled = True   # mirrors motor_driver default
+        self._collision_failsafe_active = False
+        self._collision_distance_m = float('inf')
+
+        self._cf_enable_pub = self.create_publisher(Bool, cf_enable_topic, 10)
+        self._cf_active_sub = self.create_subscription(
+            Bool, cf_active_topic, self._on_collision_active, 10
+        )
+        self._us_range_sub = self.create_subscription(
+            Range, us_range_topic, self._on_ultrasonic_range, 10
+        )
+        self.get_logger().info(
+            f"Collision failsafe topics: enable={cf_enable_topic}, "
+            f"active={cf_active_topic}, range={us_range_topic}"
+        )
+
     @staticmethod
     def _clamp(x: float, lo: float, hi: float) -> float:
         return max(lo, min(hi, x))
@@ -1529,6 +1768,16 @@ class WebVideoNode(Node):
                 'enabled': bool(self._follow_enabled),
                 'target_bbox_area': float(self._follow_target_bbox_area),
                 'max_linear': float(self._follow_max_linear),
+            },
+            'collision_failsafe': {
+                'enabled': bool(self._collision_failsafe_enabled),
+                'active': bool(self._collision_failsafe_active),
+                'distance_m': (
+                    round(float(self._collision_distance_m), 3)
+                    if self._collision_distance_m != float('inf')
+                    and self._collision_distance_m == self._collision_distance_m
+                    else None
+                ),
             },
         }
 
@@ -1694,6 +1943,58 @@ class WebVideoNode(Node):
         self._audio_enabled = False
         self.get_logger().info("Audio streaming disabled via web UI")
 
+    # ── Depth estimation control ──────────────────────────────────
+
+    def _on_depth_img(self, msg: CompressedImage) -> None:
+        if not msg.data or self._depth_frame_buffer is None:
+            return
+        self._depth_frame_buffer.set(bytes(msg.data))
+        self._depth_frame_count += 1
+        if self._depth_frame_count == 1:
+            self.get_logger().info(f"First depth frame received (bytes={len(msg.data)})")
+
+    def depth_enable(self) -> None:
+        msg = Bool()
+        msg.data = True
+        self._depth_enable_pub.publish(msg)
+        self._depth_enabled = True
+        self.get_logger().info("Depth estimation enabled via web UI")
+
+    def depth_disable(self) -> None:
+        msg = Bool()
+        msg.data = False
+        self._depth_enable_pub.publish(msg)
+        self._depth_enabled = False
+        self.get_logger().info("Depth estimation disabled via web UI")
+
+    # ── Collision failsafe control ────────────────────────────────────
+
+    def _on_collision_active(self, msg: Bool) -> None:
+        self._collision_failsafe_active = msg.data
+
+    def _on_ultrasonic_range(self, msg: Range) -> None:
+        import math
+        d = msg.range
+        if math.isnan(d) or math.isinf(d):
+            self._collision_distance_m = float('inf')
+        else:
+            self._collision_distance_m = max(d, 0.0)
+
+    def collision_failsafe_enable(self) -> None:
+        msg = Bool()
+        msg.data = True
+        self._cf_enable_pub.publish(msg)
+        self._collision_failsafe_enabled = True
+        self.get_logger().info("Collision failsafe enabled via web UI")
+
+    def collision_failsafe_disable(self) -> None:
+        msg = Bool()
+        msg.data = False
+        self._cf_enable_pub.publish(msg)
+        self._collision_failsafe_enabled = False
+        self._collision_failsafe_active = False
+        self.get_logger().info("Collision failsafe disabled via web UI")
+
     # ── Rotate-to-angle controller ────────────────────────────────────
 
     def start_rotate(self, target_deg: float, speed: float = 0.5) -> None:
@@ -1778,6 +2079,7 @@ def make_handler(
     *,
     frame_buffer: FrameBuffer,
     front_frame_buffer: FrameBuffer = None,
+    depth_frame_buffer: FrameBuffer = None,
     fps_limit: float,
     logger,
     status_provider=None,
@@ -1800,6 +2102,10 @@ def make_handler(
     audio_buffer=None,
     audio_enabler=None,
     audio_disabler=None,
+    depth_enabler=None,
+    depth_disabler=None,
+    collision_failsafe_enabler=None,
+    collision_failsafe_disabler=None,
 ):
     boundary = b"--frame"
     fps = max(float(fps_limit), 1.0)
@@ -2045,6 +2351,61 @@ def make_handler(
                 except Exception as e:
                     if logger is not None:
                         logger.warn(f"front stream client error: {e!r}")
+                    return
+
+            if path.startswith("/stream_depth.mjpg"):
+                if depth_frame_buffer is None:
+                    self.send_response(HTTPStatus.SERVICE_UNAVAILABLE)
+                    self.send_header("Content-Type", "text/plain; charset=utf-8")
+                    self.end_headers()
+                    self.wfile.write(b"Depth stream not available\n")
+                    return
+
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Age", "0")
+                self.send_header("Cache-Control", "no-cache, private")
+                self.send_header("Pragma", "no-cache")
+                self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+                self.end_headers()
+                try:
+                    self.wfile.flush()
+                except Exception:
+                    pass
+
+                last_stamp = 0.0
+                last_sent_time = 0.0
+
+                try:
+                    while True:
+                        now = time.monotonic()
+                        sleep_needed = (last_sent_time + min_period) - now
+                        if sleep_needed > 0:
+                            time.sleep(sleep_needed)
+
+                        frame = depth_frame_buffer.wait_for_newer(last_stamp, timeout=1.0)
+                        if frame.jpeg is None:
+                            continue
+
+                        last_stamp = frame.stamp_monotonic
+                        last_sent_time = time.monotonic()
+
+                        headers = (
+                            boundary + b"\r\n"
+                            b"Content-Type: image/jpeg\r\n" +
+                            f"Content-Length: {len(frame.jpeg)}\r\n\r\n".encode("ascii")
+                        )
+                        self.wfile.write(headers)
+                        self.wfile.write(frame.jpeg)
+                        self.wfile.write(b"\r\n")
+                        try:
+                            self.wfile.flush()
+                        except Exception:
+                            pass
+                except (BrokenPipeError, ConnectionResetError):
+                    return
+                except Exception as e:
+                    if logger is not None:
+                        logger.warn(f"depth stream client error: {e!r}")
                     return
 
             if path.startswith("/stream_audio"):
@@ -2499,6 +2860,46 @@ def make_handler(
                 self.end_headers()
                 return
 
+            if path == '/api/depth/enable':
+                if callable(depth_enabler):
+                    try:
+                        depth_enabler()
+                    except Exception:
+                        pass
+                self.send_response(HTTPStatus.NO_CONTENT)
+                self.end_headers()
+                return
+
+            if path == '/api/depth/disable':
+                if callable(depth_disabler):
+                    try:
+                        depth_disabler()
+                    except Exception:
+                        pass
+                self.send_response(HTTPStatus.NO_CONTENT)
+                self.end_headers()
+                return
+
+            if path == '/api/collision_failsafe/enable':
+                if callable(collision_failsafe_enabler):
+                    try:
+                        collision_failsafe_enabler()
+                    except Exception:
+                        pass
+                self.send_response(HTTPStatus.NO_CONTENT)
+                self.end_headers()
+                return
+
+            if path == '/api/collision_failsafe/disable':
+                if callable(collision_failsafe_disabler):
+                    try:
+                        collision_failsafe_disabler()
+                    except Exception:
+                        pass
+                self.send_response(HTTPStatus.NO_CONTENT)
+                self.end_headers()
+                return
+
             self.send_response(HTTPStatus.NOT_FOUND)
             self.send_header('Content-Type', 'text/plain; charset=utf-8')
             self.end_headers()
@@ -2512,7 +2913,8 @@ def main() -> None:
     frame_buffer = FrameBuffer()
     front_frame_buffer = FrameBuffer()
     audio_buffer = AudioBuffer()
-    node = WebVideoNode(frame_buffer, front_frame_buffer, audio_buffer)
+    depth_frame_buffer = FrameBuffer()
+    node = WebVideoNode(frame_buffer, front_frame_buffer, audio_buffer, depth_frame_buffer)
 
     bind = str(node.get_parameter("bind").value)
     port = int(node.get_parameter("port").value)
@@ -2527,6 +2929,7 @@ def main() -> None:
     handler_cls = make_handler(
         frame_buffer=frame_buffer,
         front_frame_buffer=front_frame_buffer,
+        depth_frame_buffer=depth_frame_buffer,
         fps_limit=fps_limit,
         logger=node.get_logger(),
         status_provider=node.status_dict,
@@ -2549,13 +2952,17 @@ def main() -> None:
         audio_buffer=audio_buffer,
         audio_enabler=node.audio_enable,
         audio_disabler=node.audio_disable,
+        depth_enabler=node.depth_enable,
+        depth_disabler=node.depth_disable,
+        collision_failsafe_enabler=node.collision_failsafe_enable,
+        collision_failsafe_disabler=node.collision_failsafe_disable,
     )
     httpd = ThreadingHTTPServer((bind, port), handler_cls)
     # Allow the serve loop to wake up periodically so Ctrl-C / rclpy shutdown is responsive.
     httpd.timeout = 0.5
 
     node.get_logger().info(
-        f"Web video server on http://{bind}:{port}/ (MJPEG: /stream.mjpg, front: /stream_front.mjpg, status: /status)"
+        f"Web video server on http://{bind}:{port}/ (MJPEG: /stream.mjpg, front: /stream_front.mjpg, depth: /stream_depth.mjpg, status: /status)"
     )
 
     try:

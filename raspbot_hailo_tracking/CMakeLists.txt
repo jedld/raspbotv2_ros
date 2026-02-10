@@ -19,7 +19,12 @@ ament_target_dependencies(hailo_detector rclcpp sensor_msgs geometry_msgs std_ms
 target_include_directories(hailo_detector PRIVATE ${OpenCV_INCLUDE_DIRS})
 target_link_libraries(hailo_detector ${OpenCV_LIBS} HailoRT::libhailort)
 
-install(TARGETS hailo_detector
+add_executable(hailo_depth src/hailo_depth_node.cpp)
+ament_target_dependencies(hailo_depth rclcpp sensor_msgs std_msgs)
+target_include_directories(hailo_depth PRIVATE ${OpenCV_INCLUDE_DIRS})
+target_link_libraries(hailo_depth ${OpenCV_LIBS} HailoRT::libhailort)
+
+install(TARGETS hailo_detector hailo_depth
   DESTINATION lib/${PROJECT_NAME}
 )
 

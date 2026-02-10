@@ -56,6 +56,14 @@ def generate_launch_description():
     follow_obstacle_stop_m = LaunchConfiguration('follow_obstacle_stop_m')
     follow_obstacle_slow_m = LaunchConfiguration('follow_obstacle_slow_m')
 
+    # Depth estimation
+    depth_hef_path = LaunchConfiguration('depth_hef_path')
+    depth_input_topic = LaunchConfiguration('depth_input_topic')
+    depth_image_topic = LaunchConfiguration('depth_image_topic')
+    depth_colorized_topic = LaunchConfiguration('depth_colorized_topic')
+    depth_enable_topic = LaunchConfiguration('depth_enable_topic')
+    depth_inference_fps = LaunchConfiguration('depth_inference_fps')
+
     return LaunchDescription([
         DeclareLaunchArgument('hef_path', default_value=''),
         DeclareLaunchArgument('model_name', default_value=''),
@@ -107,6 +115,14 @@ def generate_launch_description():
         DeclareLaunchArgument('follow_ultrasonic_topic', default_value='ultrasonic/range'),
         DeclareLaunchArgument('follow_obstacle_stop_m', default_value='0.20'),
         DeclareLaunchArgument('follow_obstacle_slow_m', default_value='0.50'),
+
+        # Depth estimation arguments
+        DeclareLaunchArgument('depth_hef_path', default_value=''),
+        DeclareLaunchArgument('depth_input_topic', default_value='front_camera/compressed'),
+        DeclareLaunchArgument('depth_image_topic', default_value='depth/image'),
+        DeclareLaunchArgument('depth_colorized_topic', default_value='depth/colorized/compressed'),
+        DeclareLaunchArgument('depth_enable_topic', default_value='depth/enable'),
+        DeclareLaunchArgument('depth_inference_fps', default_value='5.0'),
 
         Node(
             package='raspbot_hailo_tracking',
@@ -163,6 +179,13 @@ def generate_launch_description():
                 'follow_ultrasonic_topic': follow_ultrasonic_topic,
                 'follow_obstacle_stop_m': follow_obstacle_stop_m,
                 'follow_obstacle_slow_m': follow_obstacle_slow_m,
+
+                'depth_hef_path': depth_hef_path,
+                'depth_input_topic': depth_input_topic,
+                'depth_image_topic': depth_image_topic,
+                'depth_colorized_topic': depth_colorized_topic,
+                'depth_enable_topic': depth_enable_topic,
+                'depth_inference_fps': depth_inference_fps,
             }],
         ),
     ])

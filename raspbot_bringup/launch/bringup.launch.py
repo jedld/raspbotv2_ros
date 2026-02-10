@@ -29,6 +29,7 @@ def generate_launch_description():
     hailo_tilt_sign = LaunchConfiguration('hailo_tilt_sign')
     tracking_config_topic = LaunchConfiguration('tracking_config_topic')
     follow_enable_topic = LaunchConfiguration('follow_enable_topic')
+    depth_hef_path = LaunchConfiguration('depth_hef_path')
     params_file = LaunchConfiguration('params_file')
 
     default_params_file = PathJoinSubstitution([
@@ -76,6 +77,8 @@ def generate_launch_description():
         DeclareLaunchArgument('hailo_tilt_sign', default_value='-1'),
         DeclareLaunchArgument('tracking_config_topic', default_value='tracking/config'),
         DeclareLaunchArgument('follow_enable_topic', default_value='follow/enable'),
+        DeclareLaunchArgument('depth_hef_path', default_value=
+            os.path.expanduser('~/.local/share/raspbot/models/hailo8/fast_depth.hef')),
         DeclareLaunchArgument('params_file', default_value=default_params_file),
 
         IncludeLaunchDescription(
@@ -138,6 +141,7 @@ def generate_launch_description():
                 'gimbal_topic': 'camera_gimbal/command_deg',
                 'pan_sign': hailo_pan_sign,
                 'tilt_sign': hailo_tilt_sign,
+                'depth_hef_path': depth_hef_path,
             }.items(),
             condition=IfCondition(enable_hailo),
         ),

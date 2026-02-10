@@ -3,6 +3,7 @@
 #include <geometry_msgs/msg/twist.hpp>
 #include <geometry_msgs/msg/vector3.hpp>
 #include <sensor_msgs/msg/compressed_image.hpp>
+#include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/range.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/float64.hpp>
@@ -141,6 +142,18 @@ public:
         declare_parameter<double>("follow_obstacle_stop_m", 0.20);
         declare_parameter<double>("follow_obstacle_slow_m", 0.50);
 
+        // Depth estimation (optional second model on same VDevice)
+        declare_parameter<std::string>("depth_hef_path", "");
+        declare_parameter<std::string>("depth_model_name", "");
+        declare_parameter<std::string>("depth_input_topic", "front_camera/compressed");
+        declare_parameter<std::string>("depth_image_topic", "depth/image");
+        declare_parameter<std::string>("depth_colorized_topic", "depth/colorized/compressed");
+        declare_parameter<std::string>("depth_enable_topic", "depth/enable");
+        declare_parameter<double>("depth_inference_fps", 5.0);
+        declare_parameter<int>("depth_colormap", 20);       // COLORMAP_TURBO
+        declare_parameter<int>("depth_jpeg_quality", 75);
+        declare_parameter<double>("depth_max_depth_m", 10.0);
+
         const auto input_topic = get_parameter("input_topic").as_string();
         const auto detections_topic = get_parameter("detections_topic").as_string();
         const auto tracking_enable_topic = get_parameter("tracking_enable_topic").as_string();
@@ -227,6 +240,33 @@ public:
         img_sub_ = create_subscription<sensor_msgs::msg::CompressedImage>(
             input_topic, rclcpp::SensorDataQoS(),
             std::bind(&HailoDetectorNode::on_image, this, std::placeholders::_1));
+
+        // Depth estimation setup
+        depth_enabled_.store(true);
+        {
+            const auto depth_input_topic = get_parameter("depth_input_topic").as_string();
+            const auto depth_image_topic = get_parameter("depth_image_topic").as_string();
+            const auto depth_colorized_topic = get_parameter("depth_colorized_topic").as_string();
+            const auto depth_enable_topic = get_parameter("depth_enable_topic").as_string();
+
+            depth_pub_ = create_publisher<sensor_msgs::msg::Image>(depth_image_topic, 10);
+            depth_colorized_pub_ = create_publisher<sensor_msgs::msg::CompressedImage>(depth_colorized_topic, 10);
+
+            depth_img_sub_ = create_subscription<sensor_msgs::msg::CompressedImage>(
+                depth_input_topic, rclcpp::SensorDataQoS(),
+                std::bind(&HailoDetectorNode::on_depth_image, this, std::placeholders::_1));
+
+            depth_enable_sub_ = create_subscription<std_msgs::msg::Bool>(
+                depth_enable_topic, 10,
+                [this](const std_msgs::msg::Bool::SharedPtr msg) {
+                    depth_enabled_.store(msg->data);
+                    RCLCPP_INFO(get_logger(), "Depth estimation %s", msg->data ? "ENABLED" : "DISABLED");
+                });
+
+            RCLCPP_INFO(get_logger(), "depth input topic: %s", depth_input_topic.c_str());
+            RCLCPP_INFO(get_logger(), "depth image topic: %s", depth_image_topic.c_str());
+            RCLCPP_INFO(get_logger(), "depth colorized topic: %s", depth_colorized_topic.c_str());
+        }
 
         load_timer_ = create_wall_timer(1s, std::bind(&HailoDetectorNode::try_load_model, this));
 
@@ -408,10 +448,105 @@ private:
 
         RCLCPP_INFO(get_logger(), "Loaded HEF '%s' (input=%dx%d bytes=%zu, output bytes=%zu)",
             hef_path.c_str(), input_w_, input_h_, input_frame_size_, output_frame_size_);
+
+        // Load depth model on the same VDevice (optional)
+        try_load_depth_model();
+    }
+
+    void try_load_depth_model()
+    {
+        if (depth_configured_) {
+            return;
+        }
+        if (!vdevice_) {
+            return; // VDevice not ready yet
+        }
+
+        const auto depth_hef_path = get_parameter("depth_hef_path").as_string();
+        if (depth_hef_path.empty()) {
+            return; // Depth not configured
+        }
+
+        const auto depth_model_name = get_parameter("depth_model_name").as_string();
+
+        auto infer_exp = vdevice_->create_infer_model(depth_hef_path, depth_model_name);
+        if (!infer_exp) {
+            RCLCPP_ERROR(get_logger(), "Failed to create depth InferModel from '%s' (status=%d)",
+                         depth_hef_path.c_str(), static_cast<int>(infer_exp.status()));
+            return;
+        }
+        depth_infer_model_ = infer_exp.release();
+
+        auto in_exp = depth_infer_model_->input();
+        if (!in_exp) {
+            RCLCPP_ERROR(get_logger(), "Depth InferModel::input failed (status=%d)",
+                         static_cast<int>(in_exp.status()));
+            depth_infer_model_.reset();
+            return;
+        }
+        auto depth_input = in_exp.release();
+        depth_input.set_format_type(HAILO_FORMAT_TYPE_UINT8);
+        depth_input.set_format_order(HAILO_FORMAT_ORDER_NHWC);
+
+        auto out_exp = depth_infer_model_->output();
+        if (!out_exp) {
+            RCLCPP_ERROR(get_logger(), "Depth InferModel::output failed (status=%d)",
+                         static_cast<int>(out_exp.status()));
+            depth_infer_model_.reset();
+            return;
+        }
+        auto depth_output = out_exp.release();
+        depth_output.set_format_type(HAILO_FORMAT_TYPE_FLOAT32);
+
+        auto configured_exp = depth_infer_model_->configure();
+        if (!configured_exp) {
+            RCLCPP_ERROR(get_logger(), "Depth InferModel::configure failed (status=%d)",
+                         static_cast<int>(configured_exp.status()));
+            depth_infer_model_.reset();
+            return;
+        }
+        depth_configured_ = std::make_unique<hailort::ConfiguredInferModel>(configured_exp.release());
+
+        const auto shape = depth_input.shape();
+        depth_input_h_ = static_cast<int>(shape.height);
+        depth_input_w_ = static_cast<int>(shape.width);
+        depth_input_frame_size_ = depth_input.get_frame_size();
+        depth_output_frame_size_ = depth_output.get_frame_size();
+
+        auto in_buf = hailort::Buffer::create(depth_input_frame_size_);
+        auto out_buf = hailort::Buffer::create(depth_output_frame_size_);
+        if (!in_buf || !out_buf) {
+            RCLCPP_ERROR(get_logger(), "Failed to allocate depth IO buffers");
+            depth_configured_.reset();
+            depth_infer_model_.reset();
+            return;
+        }
+        depth_input_buffer_ = std::make_unique<hailort::Buffer>(in_buf.release());
+        depth_output_buffer_ = std::make_unique<hailort::Buffer>(out_buf.release());
+
+        depth_input_name_ = depth_input.name();
+        depth_output_name_ = depth_output.name();
+
+        RCLCPP_INFO(get_logger(),
+                     "Loaded depth HEF '%s' (input=%dx%d bytes=%zu, output bytes=%zu)",
+                     depth_hef_path.c_str(), depth_input_w_, depth_input_h_,
+                     depth_input_frame_size_, depth_output_frame_size_);
     }
 
     void reset_model()
     {
+        // Reset depth first (depends on vdevice)
+        depth_configured_.reset();
+        depth_infer_model_.reset();
+        depth_input_buffer_.reset();
+        depth_output_buffer_.reset();
+        depth_input_name_.clear();
+        depth_output_name_.clear();
+        depth_input_w_ = 0;
+        depth_input_h_ = 0;
+        depth_input_frame_size_ = 0;
+        depth_output_frame_size_ = 0;
+
         configured_.reset();
         infer_model_.reset();
         vdevice_.reset();
@@ -977,6 +1112,135 @@ private:
     int scan_sweep_count_{0};
 
     steady_clock::time_point last_infer_time_;
+
+    // ── Depth estimation (shares vdevice_ with detector) ─────────────
+
+    void on_depth_image(const sensor_msgs::msg::CompressedImage::SharedPtr msg)
+    {
+        if (!depth_enabled_.load() || !depth_configured_) {
+            return;
+        }
+
+        const double fps = std::max(1.0, get_parameter("depth_inference_fps").as_double());
+        const auto min_dt = std::chrono::duration_cast<steady_clock::duration>(
+            std::chrono::duration<double>(1.0 / fps));
+        const auto now = steady_clock::now();
+        if ((now - last_depth_infer_time_) < min_dt) {
+            return;
+        }
+        last_depth_infer_time_ = now;
+
+        if (msg->data.empty()) {
+            return;
+        }
+        cv::Mat raw(1, static_cast<int>(msg->data.size()), CV_8UC1,
+                    const_cast<unsigned char*>(msg->data.data()));
+        cv::Mat bgr = cv::imdecode(raw, cv::IMREAD_COLOR);
+        if (bgr.empty()) {
+            return;
+        }
+
+        const int orig_w = bgr.cols;
+        const int orig_h = bgr.rows;
+
+        cv::Mat resized;
+        cv::resize(bgr, resized, cv::Size(depth_input_w_, depth_input_h_), 0, 0, cv::INTER_LINEAR);
+        cv::Mat rgb;
+        cv::cvtColor(resized, rgb, cv::COLOR_BGR2RGB);
+        if (!rgb.isContinuous()) {
+            rgb = rgb.clone();
+        }
+
+        if (static_cast<size_t>(rgb.total() * rgb.elemSize()) < depth_input_frame_size_) {
+            return;
+        }
+
+        std::memcpy(depth_input_buffer_->data(), rgb.data, depth_input_frame_size_);
+
+        std::map<std::string, hailort::MemoryView> buffers;
+        buffers.emplace(depth_input_name_, hailort::MemoryView(*depth_input_buffer_));
+        buffers.emplace(depth_output_name_, hailort::MemoryView(*depth_output_buffer_));
+
+        auto bindings_exp = depth_configured_->create_bindings(buffers);
+        if (!bindings_exp) {
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+                                 "depth create_bindings failed (status=%d)",
+                                 static_cast<int>(bindings_exp.status()));
+            return;
+        }
+        auto bindings = bindings_exp.release();
+
+        const auto st = depth_configured_->run(bindings, 100ms);
+        if (HAILO_SUCCESS != st) {
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+                                 "depth hailo run failed status=%d", static_cast<int>(st));
+            return;
+        }
+
+        const float *depth_data = reinterpret_cast<const float*>(depth_output_buffer_->data());
+        cv::Mat depth_small(depth_input_h_, depth_input_w_, CV_32FC1, const_cast<float*>(depth_data));
+
+        cv::Mat depth_full;
+        cv::resize(depth_small, depth_full, cv::Size(orig_w, orig_h), 0, 0, cv::INTER_LINEAR);
+        cv::max(depth_full, 0.0f, depth_full);
+
+        // Publish raw depth (32FC1)
+        if (depth_pub_->get_subscription_count() > 0) {
+            auto depth_msg = std::make_unique<sensor_msgs::msg::Image>();
+            depth_msg->header = msg->header;
+            depth_msg->height = static_cast<uint32_t>(depth_full.rows);
+            depth_msg->width = static_cast<uint32_t>(depth_full.cols);
+            depth_msg->encoding = "32FC1";
+            depth_msg->is_bigendian = false;
+            depth_msg->step = static_cast<uint32_t>(depth_full.cols * sizeof(float));
+            const size_t data_size = depth_msg->step * depth_full.rows;
+            depth_msg->data.resize(data_size);
+            std::memcpy(depth_msg->data.data(), depth_full.data, data_size);
+            depth_pub_->publish(std::move(depth_msg));
+        }
+
+        // Publish colorized depth (JPEG) for web UI
+        if (depth_colorized_pub_->get_subscription_count() > 0) {
+            const double max_depth = std::max(0.1, get_parameter("depth_max_depth_m").as_double());
+            const int colormap = static_cast<int>(get_parameter("depth_colormap").as_int());
+            const int jpeg_quality = static_cast<int>(get_parameter("depth_jpeg_quality").as_int());
+
+            cv::Mat depth_norm;
+            depth_full.convertTo(depth_norm, CV_8UC1, 255.0 / max_depth);
+
+            cv::Mat depth_color;
+            cv::applyColorMap(depth_norm, depth_color, colormap);
+
+            std::vector<int> enc_params = {cv::IMWRITE_JPEG_QUALITY, jpeg_quality};
+            std::vector<uchar> jpeg_buf;
+            cv::imencode(".jpg", depth_color, jpeg_buf, enc_params);
+
+            auto color_msg = std::make_unique<sensor_msgs::msg::CompressedImage>();
+            color_msg->header = msg->header;
+            color_msg->format = "jpeg";
+            color_msg->data = std::move(jpeg_buf);
+            depth_colorized_pub_->publish(std::move(color_msg));
+        }
+    }
+
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr depth_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr depth_colorized_pub_;
+    rclcpp::Subscription<sensor_msgs::msg::CompressedImage>::SharedPtr depth_img_sub_;
+    rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr depth_enable_sub_;
+
+    std::shared_ptr<hailort::InferModel> depth_infer_model_;
+    std::unique_ptr<hailort::ConfiguredInferModel> depth_configured_;
+    std::unique_ptr<hailort::Buffer> depth_input_buffer_;
+    std::unique_ptr<hailort::Buffer> depth_output_buffer_;
+    std::string depth_input_name_;
+    std::string depth_output_name_;
+    int depth_input_w_{0};
+    int depth_input_h_{0};
+    size_t depth_input_frame_size_{0};
+    size_t depth_output_frame_size_{0};
+
+    std::atomic<bool> depth_enabled_{true};
+    steady_clock::time_point last_depth_infer_time_{steady_clock::duration::zero()};
 };
 
 int main(int argc, char **argv)
