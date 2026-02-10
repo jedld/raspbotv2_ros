@@ -15,6 +15,7 @@ def generate_launch_description():
     enable_gimbal = LaunchConfiguration('enable_gimbal')
     enable_lightbar = LaunchConfiguration('enable_lightbar')
     enable_oled = LaunchConfiguration('enable_oled')
+    enable_imu = LaunchConfiguration('enable_imu')
     params_file = LaunchConfiguration('params_file')
 
     default_params_file = PathJoinSubstitution([
@@ -31,6 +32,7 @@ def generate_launch_description():
         DeclareLaunchArgument('enable_gimbal', default_value='true'),
         DeclareLaunchArgument('enable_lightbar', default_value='true'),
         DeclareLaunchArgument('enable_oled', default_value='true'),
+        DeclareLaunchArgument('enable_imu', default_value='true'),
         DeclareLaunchArgument('params_file', default_value=default_params_file),
 
         Node(
@@ -90,5 +92,14 @@ def generate_launch_description():
             output='screen',
             parameters=[params_file],
             condition=IfCondition(enable_oled),
+        ),
+
+        Node(
+            package='raspbot_hw',
+            executable='imu_serial',
+            name='imu_serial',
+            output='screen',
+            parameters=[params_file],
+            condition=IfCondition(enable_imu),
         ),
     ])

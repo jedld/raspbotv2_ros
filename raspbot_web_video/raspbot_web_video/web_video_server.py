@@ -12,8 +12,8 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from geometry_msgs.msg import Vector3, Twist
-from sensor_msgs.msg import CompressedImage
-from std_msgs.msg import Bool, Float64, String, Int32MultiArray
+from sensor_msgs.msg import CompressedImage, Imu
+from std_msgs.msg import Bool, Empty, Float32, Float64, Int32, Int32MultiArray, String
 
 
 INDEX_HTML = """<!doctype html>
@@ -151,6 +151,87 @@ INDEX_HTML = """<!doctype html>
                 <div class=\"kv\" id=\"snapStatus\"></div>
             </div>
             <div id=\"snapHistory\" style=\"margin-top:8px; font-size:12px;\"></div>
+        </div>
+
+        <div class=\"card\" id=\"imuCard\">
+            <h2>&#129517; IMU &amp; Orientation</h2>
+            <p class=\"muted\">Live 6-axis IMU data from Arduino Nano RP2040 Connect. Publishes on <code>imu/data</code>.</p>
+            <div id=\"imuCalBanner\" style=\"background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:8px 12px;margin-bottom:8px;display:none;\">
+                &#9888;&#65039; IMU not calibrated — data may be unreliable. Hold robot still…
+            </div>
+            <div style=\"display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start;\">
+                <!-- 3D Robot orientation view -->
+                <div style=\"flex:0 0 auto;text-align:center;\">
+                    <div id=\"imuScene\" style=\"width:200px;height:200px;perspective:600px;margin:0 auto;\">
+                        <div id=\"imuCube\" style=\"width:140px;height:80px;position:relative;transform-style:preserve-3d;margin:60px auto 0;\">
+                            <!-- Front -->
+                            <div style=\"position:absolute;width:140px;height:80px;background:rgba(51,51,51,0.92);border:2px solid #555;display:flex;align-items:center;justify-content:center;color:#0f0;font-size:11px;font-weight:bold;transform:translateZ(40px);\">FRONT</div>
+                            <!-- Back -->
+                            <div style=\"position:absolute;width:140px;height:80px;background:rgba(68,68,68,0.88);border:2px solid #555;display:flex;align-items:center;justify-content:center;color:#999;font-size:11px;transform:rotateY(180deg) translateZ(40px);\">BACK</div>
+                            <!-- Left -->
+                            <div style=\"position:absolute;width:80px;height:80px;background:rgba(60,60,60,0.88);border:2px solid #555;display:flex;align-items:center;justify-content:center;color:#f80;font-size:10px;transform:rotateY(-90deg) translateZ(70px);left:30px;\">L</div>
+                            <!-- Right -->
+                            <div style=\"position:absolute;width:80px;height:80px;background:rgba(60,60,60,0.88);border:2px solid #555;display:flex;align-items:center;justify-content:center;color:#08f;font-size:10px;transform:rotateY(90deg) translateZ(70px);left:30px;\">R</div>
+                            <!-- Top -->
+                            <div style=\"position:absolute;width:140px;height:80px;background:rgba(80,200,80,0.25);border:2px solid #4a4;display:flex;align-items:center;justify-content:center;color:#4a4;font-size:10px;transform:rotateX(90deg) translateZ(40px);\">TOP</div>
+                            <!-- Bottom -->
+                            <div style=\"position:absolute;width:140px;height:80px;background:rgba(180,50,50,0.25);border:2px solid #a44;transform:rotateX(-90deg) translateZ(40px);\"></div>
+                            <!-- Wheels (decorative) -->
+                            <div style=\"position:absolute;width:16px;height:16px;border-radius:50%;background:#222;border:2px solid #666;top:80px;left:6px;transform:translateZ(44px);\"></div>
+                            <div style=\"position:absolute;width:16px;height:16px;border-radius:50%;background:#222;border:2px solid #666;top:80px;right:6px;transform:translateZ(44px);\"></div>
+                            <div style=\"position:absolute;width:16px;height:16px;border-radius:50%;background:#222;border:2px solid #666;top:80px;left:6px;transform:translateZ(-44px);\"></div>
+                            <div style=\"position:absolute;width:16px;height:16px;border-radius:50%;background:#222;border:2px solid #666;top:80px;right:6px;transform:translateZ(-44px);\"></div>
+                        </div>
+                    </div>
+                    <div class=\"kv\" style=\"margin-top:4px;\">Yaw: <span id=\"imuYawLabel\">0.0</span>°</div>
+                </div>
+
+                <!-- Data readouts -->
+                <div style=\"flex:1 1 260px;\">
+                    <table style=\"width:100%;border-collapse:collapse;font-size:12px;font-family:ui-monospace,monospace;\">
+                        <thead><tr style=\"border-bottom:1px solid #ddd;\"><th style=\"text-align:left;padding:2px 6px;\">Axis</th><th>Accel (m/s²)</th><th>Gyro (°/s)</th></tr></thead>
+                        <tbody>
+                            <tr><td style=\"padding:2px 6px;font-weight:bold;\">X</td><td id=\"imuAx\" style=\"text-align:center;\">—</td><td id=\"imuGx\" style=\"text-align:center;\">—</td></tr>
+                            <tr><td style=\"padding:2px 6px;font-weight:bold;\">Y</td><td id=\"imuAy\" style=\"text-align:center;\">—</td><td id=\"imuGy\" style=\"text-align:center;\">—</td></tr>
+                            <tr><td style=\"padding:2px 6px;font-weight:bold;\">Z</td><td id=\"imuAz\" style=\"text-align:center;\">—</td><td id=\"imuGz\" style=\"text-align:center;\">—</td></tr>
+                        </tbody>
+                    </table>
+                    <div class=\"kv\" style=\"margin-top:6px;\">
+                        Temp: <span id=\"imuTemp\">—</span> °C &nbsp;|&nbsp;
+                        Mic: <span id=\"imuMic\">—</span> &nbsp;|&nbsp;
+                        Cal: <span id=\"imuCal\">—</span>
+                    </div>
+                    <!-- Yaw top-down compass -->
+                    <div style=\"margin-top:10px;\">
+                        <canvas id=\"imuCompass\" width=\"180\" height=\"180\" style=\"display:block;margin:0 auto;\"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Rotate to angle control -->
+            <div style=\"margin-top:12px;border-top:1px solid #eee;padding-top:10px;\">
+                <h3 style=\"margin:0 0 6px 0;font-size:14px;\">Rotate to Angle</h3>
+                <div class=\"row\">
+                    <div>
+                        <label for=\"imuTargetAngle\">Target: <span id=\"imuTargetVal\">0</span>°</label>
+                        <input id=\"imuTargetAngle\" type=\"range\" min=\"-180\" max=\"180\" step=\"1\" value=\"0\" />
+                    </div>
+                    <div style=\"display:flex;gap:6px;align-items:center;\">
+                        <input id=\"imuAngleInput\" type=\"number\" min=\"-180\" max=\"180\" step=\"1\" value=\"0\" style=\"width:70px;padding:6px;border:1px solid #ccc;border-radius:6px;\" />
+                        <span>°</span>
+                    </div>
+                    <button class=\"primary\" id=\"imuRotateBtn\">Rotate</button>
+                    <button class=\"danger\" id=\"imuRotateStop\">Stop</button>
+                    <button id=\"imuResetYaw\">Reset Yaw</button>
+                </div>
+                <div class=\"row\" style=\"margin-top:6px;\">
+                    <div>
+                        <label for=\"imuRotateSpeed\">Speed: <span id=\"imuRotateSpeedVal\">0.5</span></label>
+                        <input id=\"imuRotateSpeed\" type=\"range\" min=\"0.1\" max=\"1.0\" step=\"0.1\" value=\"0.5\" />
+                    </div>
+                    <div class=\"kv\">Rotation: <span id=\"imuRotateStatus\">idle</span></div>
+                </div>
+            </div>
         </div>
   </div>
 
@@ -629,6 +710,260 @@ INDEX_HTML = """<!doctype html>
         fetchDetections();
         setInterval(fetchDetections, 200);
         drawOverlay();
+
+        // ──────────────────────────────────────────────────────────────
+        // IMU Dashboard
+        // ──────────────────────────────────────────────────────────────
+        const imuCube = document.getElementById('imuCube');
+        const imuYawLabel = document.getElementById('imuYawLabel');
+        const imuCalBanner = document.getElementById('imuCalBanner');
+        const imuAx = document.getElementById('imuAx');
+        const imuAy = document.getElementById('imuAy');
+        const imuAz = document.getElementById('imuAz');
+        const imuGx = document.getElementById('imuGx');
+        const imuGy = document.getElementById('imuGy');
+        const imuGz = document.getElementById('imuGz');
+        const imuTemp = document.getElementById('imuTemp');
+        const imuMic = document.getElementById('imuMic');
+        const imuCal = document.getElementById('imuCal');
+        const imuCompass = document.getElementById('imuCompass');
+        const imuTargetAngle = document.getElementById('imuTargetAngle');
+        const imuAngleInput = document.getElementById('imuAngleInput');
+        const imuTargetVal = document.getElementById('imuTargetVal');
+        const imuRotateBtn = document.getElementById('imuRotateBtn');
+        const imuRotateStop = document.getElementById('imuRotateStop');
+        const imuResetYaw = document.getElementById('imuResetYaw');
+        const imuRotateSpeed = document.getElementById('imuRotateSpeed');
+        const imuRotateSpeedVal = document.getElementById('imuRotateSpeedVal');
+        const imuRotateStatus = document.getElementById('imuRotateStatus');
+
+        let imuData = null;
+        let imuRotating = false;
+
+        imuTargetAngle.addEventListener('input', () => {
+            imuTargetVal.textContent = imuTargetAngle.value;
+            imuAngleInput.value = imuTargetAngle.value;
+        });
+        imuAngleInput.addEventListener('input', () => {
+            let v = clamp(Number(imuAngleInput.value), -180, 180);
+            imuTargetAngle.value = String(Math.round(v));
+            imuTargetVal.textContent = String(Math.round(v));
+        });
+        imuRotateSpeed.addEventListener('input', () => {
+            imuRotateSpeedVal.textContent = Number(imuRotateSpeed.value).toFixed(1);
+        });
+
+        async function fetchImu() {
+            try {
+                const r = await fetch('/api/imu', {cache: 'no-store'});
+                if (!r.ok) return;
+                imuData = await r.json();
+
+                const d = imuData;
+                const f2 = (v) => v != null ? Number(v).toFixed(2) : '—';
+                const f1 = (v) => v != null ? Number(v).toFixed(1) : '—';
+
+                imuAx.textContent = f2(d.accel_x);
+                imuAy.textContent = f2(d.accel_y);
+                imuAz.textContent = f2(d.accel_z);
+                imuGx.textContent = f2(d.gyro_x);
+                imuGy.textContent = f2(d.gyro_y);
+                imuGz.textContent = f2(d.gyro_z);
+                imuTemp.textContent = f1(d.temperature);
+                imuMic.textContent = d.mic_level != null ? String(d.mic_level) : '—';
+
+                const cal = Boolean(d.calibrated);
+                imuCal.textContent = cal ? '✅ OK' : '⏳ pending';
+                imuCal.style.color = cal ? '#080' : '#b00';
+                imuCalBanner.style.display = cal ? 'none' : 'block';
+
+                // Update yaw label
+                const yaw = d.yaw_deg != null ? Number(d.yaw_deg) : 0;
+                imuYawLabel.textContent = yaw.toFixed(1);
+
+                // Update 3D cube orientation
+                updateCube(d);
+                // Update compass
+                drawCompass(yaw, d.rotate_target_deg);
+                // Update rotate status
+                if (d.rotate_active) {
+                    imuRotating = true;
+                    imuRotateStatus.textContent = 'rotating to ' + (d.rotate_target_deg != null ? d.rotate_target_deg.toFixed(0) + '°' : '?');
+                    imuRotateStatus.style.color = '#05a';
+                } else {
+                    if (imuRotating) {
+                        imuRotateStatus.textContent = 'done';
+                        imuRotateStatus.style.color = '#080';
+                        imuRotating = false;
+                    }
+                }
+            } catch (e) {
+                // ignore
+            }
+        }
+
+        function updateCube(d) {
+            if (!d) return;
+            // Pitch from accel: atan2(ax, sqrt(ay²+az²))
+            const ax = d.accel_x || 0;
+            const ay = d.accel_y || 0;
+            const az = d.accel_z || 0;
+            const pitch = Math.atan2(ax, Math.sqrt(ay*ay + az*az)) * (180/Math.PI);
+            const roll = Math.atan2(-ay, az) * (180/Math.PI);
+            const yaw = d.yaw_deg || 0;
+
+            // CSS transform: rotations applied in order
+            imuCube.style.transform = 'rotateX(' + (-pitch).toFixed(1) + 'deg) rotateZ(' + (roll).toFixed(1) + 'deg) rotateY(' + (-yaw).toFixed(1) + 'deg)';
+        }
+
+        function drawCompass(yaw, target) {
+            const ctx = imuCompass.getContext('2d');
+            if (!ctx) return;
+            const W = imuCompass.width;
+            const H = imuCompass.height;
+            const cx = W / 2;
+            const cy = H / 2;
+            const R = Math.min(cx, cy) - 10;
+
+            ctx.clearRect(0, 0, W, H);
+
+            // Outer circle
+            ctx.beginPath();
+            ctx.arc(cx, cy, R, 0, 2 * Math.PI);
+            ctx.strokeStyle = '#ccc';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            // Cardinal ticks & labels
+            ctx.font = '11px ui-monospace, monospace';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillStyle = '#666';
+            const cardinals = [{a:0, l:'0°'}, {a:90, l:'90°'}, {a:180, l:'±180°'}, {a:-90, l:'-90°'}];
+            for (const c of cardinals) {
+                const rad = (c.a - 90) * Math.PI / 180;
+                const tx = cx + Math.cos(rad) * (R + 0);
+                const ty = cy + Math.sin(rad) * (R + 0);
+                // Tick
+                ctx.beginPath();
+                ctx.moveTo(cx + Math.cos(rad) * (R - 6), cy + Math.sin(rad) * (R - 6));
+                ctx.lineTo(cx + Math.cos(rad) * R, cy + Math.sin(rad) * R);
+                ctx.strokeStyle = '#999';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+            }
+            // Labels outside
+            ctx.fillStyle = '#666';
+            ctx.fillText('0°', cx, cy - R - 0 + 14);
+            ctx.fillText('±180°', cx, cy + R + 0 - 12);
+            ctx.fillText('90°', cx + R - 16, cy);
+            ctx.fillText('-90°', cx - R + 18, cy);
+
+            // Minor ticks every 30°
+            for (let a = 0; a < 360; a += 30) {
+                const rad = (a - 90) * Math.PI / 180;
+                ctx.beginPath();
+                ctx.moveTo(cx + Math.cos(rad) * (R - 3), cy + Math.sin(rad) * (R - 3));
+                ctx.lineTo(cx + Math.cos(rad) * R, cy + Math.sin(rad) * R);
+                ctx.strokeStyle = '#ddd';
+                ctx.lineWidth = 1;
+                ctx.stroke();
+            }
+
+            // Target angle indicator (if set and rotating)
+            if (target != null) {
+                const tRad = (target - 90) * Math.PI / 180;
+                ctx.beginPath();
+                ctx.moveTo(cx, cy);
+                ctx.lineTo(cx + Math.cos(tRad) * (R - 8), cy + Math.sin(tRad) * (R - 8));
+                ctx.strokeStyle = 'rgba(0, 100, 255, 0.4)';
+                ctx.lineWidth = 6;
+                ctx.lineCap = 'round';
+                ctx.stroke();
+                ctx.lineCap = 'butt';
+                // Target dot
+                ctx.beginPath();
+                ctx.arc(cx + Math.cos(tRad) * (R - 8), cy + Math.sin(tRad) * (R - 8), 5, 0, 2 * Math.PI);
+                ctx.fillStyle = 'rgba(0, 100, 255, 0.6)';
+                ctx.fill();
+            }
+
+            // Current yaw arrow
+            const yRad = (yaw - 90) * Math.PI / 180;
+            ctx.beginPath();
+            ctx.moveTo(cx, cy);
+            ctx.lineTo(cx + Math.cos(yRad) * (R - 12), cy + Math.sin(yRad) * (R - 12));
+            ctx.strokeStyle = '#e00';
+            ctx.lineWidth = 3;
+            ctx.lineCap = 'round';
+            ctx.stroke();
+            ctx.lineCap = 'butt';
+
+            // Arrow head
+            const headLen = 10;
+            const headAngle = 0.4;
+            const tipX = cx + Math.cos(yRad) * (R - 12);
+            const tipY = cy + Math.sin(yRad) * (R - 12);
+            ctx.beginPath();
+            ctx.moveTo(tipX, tipY);
+            ctx.lineTo(tipX - headLen * Math.cos(yRad - headAngle), tipY - headLen * Math.sin(yRad - headAngle));
+            ctx.moveTo(tipX, tipY);
+            ctx.lineTo(tipX - headLen * Math.cos(yRad + headAngle), tipY - headLen * Math.sin(yRad + headAngle));
+            ctx.strokeStyle = '#e00';
+            ctx.lineWidth = 2.5;
+            ctx.stroke();
+
+            // Center dot
+            ctx.beginPath();
+            ctx.arc(cx, cy, 4, 0, 2 * Math.PI);
+            ctx.fillStyle = '#333';
+            ctx.fill();
+
+            // Yaw text
+            ctx.font = 'bold 13px ui-monospace, monospace';
+            ctx.textAlign = 'center';
+            ctx.fillStyle = '#333';
+            ctx.fillText(yaw.toFixed(1) + '°', cx, cy + R + 0 - 25);
+        }
+
+        // Rotate to angle
+        imuRotateBtn.addEventListener('click', async () => {
+            const angle = Number(imuAngleInput.value);
+            const speed = Number(imuRotateSpeed.value);
+            if (Number.isNaN(angle) || Number.isNaN(speed)) return;
+            imuRotateStatus.textContent = 'starting…';
+            imuRotateStatus.style.color = '#05a';
+            try {
+                await fetch('/api/imu/rotate', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({target_deg: angle, speed: speed})
+                });
+            } catch (e) {
+                imuRotateStatus.textContent = 'error';
+                imuRotateStatus.style.color = '#b00';
+            }
+        });
+
+        imuRotateStop.addEventListener('click', async () => {
+            try {
+                await fetch('/api/imu/rotate/stop', {method: 'POST'});
+                imuRotateStatus.textContent = 'stopped';
+                imuRotateStatus.style.color = '#b00';
+            } catch (e) { /* ignore */ }
+        });
+
+        imuResetYaw.addEventListener('click', async () => {
+            try {
+                await fetch('/api/imu/calibrate', {method: 'POST'});
+                imuRotateStatus.textContent = 'recalibrating…';
+                imuRotateStatus.style.color = '#a80';
+            } catch (e) { /* ignore */ }
+        });
+
+        // Poll IMU at ~10 Hz
+        fetchImu();
+        setInterval(fetchImu, 100);
     </script>
 </body>
 </html>
@@ -777,6 +1112,54 @@ class WebVideoNode(Node):
         lightbar_command_topic = str(self.get_parameter("lightbar_command_topic").value)
         self._lightbar_pub = self.create_publisher(String, lightbar_command_topic, 10)
         self.get_logger().info(f"Lightbar command topic: {lightbar_command_topic} (std_msgs/String JSON)")
+
+        # ── IMU integration ───────────────────────────────────────────
+        self.declare_parameter("imu_data_topic", "imu/data")
+        self.declare_parameter("imu_yaw_topic", "imu/yaw_deg")
+        self.declare_parameter("imu_calibrated_topic", "imu/calibrated")
+        self.declare_parameter("imu_calibrate_topic", "imu/calibrate")
+        self.declare_parameter("imu_temperature_topic", "imu/temperature")
+        self.declare_parameter("imu_mic_topic", "imu/mic_level")
+        # Rotate-to-angle controller params
+        self.declare_parameter("rotate_kp", 2.5)       # proportional gain (rad/s per degree of error)
+        self.declare_parameter("rotate_tolerance_deg", 2.0)
+        self.declare_parameter("rotate_settle_sec", 0.3)
+
+        imu_data_topic = str(self.get_parameter("imu_data_topic").value)
+        imu_yaw_topic = str(self.get_parameter("imu_yaw_topic").value)
+        imu_cal_topic = str(self.get_parameter("imu_calibrated_topic").value)
+        imu_calibrate_topic = str(self.get_parameter("imu_calibrate_topic").value)
+        imu_temp_topic = str(self.get_parameter("imu_temperature_topic").value)
+        imu_mic_topic = str(self.get_parameter("imu_mic_topic").value)
+
+        self._imu_accel = [0.0, 0.0, 0.0]
+        self._imu_gyro = [0.0, 0.0, 0.0]
+        self._imu_temperature = 0.0
+        self._imu_mic_level = 0
+        self._imu_yaw_deg = 0.0
+        self._imu_calibrated = False
+        self._imu_last_monotonic = 0.0
+
+        # Rotate-to-angle controller state
+        self._rotate_active = False
+        self._rotate_target_deg = None
+        self._rotate_speed = 0.5
+        self._rotate_kp = float(self.get_parameter("rotate_kp").value)
+        self._rotate_tolerance = float(self.get_parameter("rotate_tolerance_deg").value)
+        self._rotate_settle_sec = float(self.get_parameter("rotate_settle_sec").value)
+        self._rotate_in_tolerance_since = None
+
+        self._imu_sub = self.create_subscription(Imu, imu_data_topic, self._on_imu_data, 10)
+        self._imu_yaw_sub = self.create_subscription(Float64, imu_yaw_topic, self._on_imu_yaw, 10)
+        self._imu_cal_sub = self.create_subscription(Bool, imu_cal_topic, self._on_imu_cal, 10)
+        self._imu_temp_sub = self.create_subscription(Float32, imu_temp_topic, self._on_imu_temp, 10)
+        self._imu_mic_sub = self.create_subscription(Int32, imu_mic_topic, self._on_imu_mic, 10)
+        self._imu_calibrate_pub = self.create_publisher(Empty, imu_calibrate_topic, 10)
+
+        # Rotate controller timer (20 Hz)
+        self._rotate_timer = self.create_timer(0.05, self._rotate_tick)
+
+        self.get_logger().info(f"IMU topics: data={imu_data_topic}, yaw={imu_yaw_topic}, cal={imu_cal_topic}")
 
     @staticmethod
     def _clamp(x: float, lo: float, hi: float) -> float:
@@ -993,6 +1376,132 @@ class WebVideoNode(Node):
         msg.data = json.dumps(cmd)
         self._lightbar_pub.publish(msg)
 
+    # ── IMU callbacks ─────────────────────────────────────────────────
+
+    def _on_imu_data(self, msg: Imu) -> None:
+        self._imu_accel = [
+            msg.linear_acceleration.x,
+            msg.linear_acceleration.y,
+            msg.linear_acceleration.z,
+        ]
+        self._imu_gyro = [
+            msg.angular_velocity.x * 57.2957795,  # rad/s → °/s for display
+            msg.angular_velocity.y * 57.2957795,
+            msg.angular_velocity.z * 57.2957795,
+        ]
+        self._imu_last_monotonic = time.monotonic()
+
+    def _on_imu_yaw(self, msg: Float64) -> None:
+        self._imu_yaw_deg = msg.data
+
+    def _on_imu_cal(self, msg: Bool) -> None:
+        self._imu_calibrated = msg.data
+
+    def _on_imu_temp(self, msg: Float32) -> None:
+        self._imu_temperature = msg.data
+
+    def _on_imu_mic(self, msg: Int32) -> None:
+        self._imu_mic_level = msg.data
+
+    def get_imu_dict(self) -> dict:
+        now = time.monotonic()
+        age = None
+        if self._imu_last_monotonic > 0.0:
+            age = max(0.0, now - self._imu_last_monotonic)
+        return {
+            'accel_x': round(self._imu_accel[0], 3),
+            'accel_y': round(self._imu_accel[1], 3),
+            'accel_z': round(self._imu_accel[2], 3),
+            'gyro_x': round(self._imu_gyro[0], 2),
+            'gyro_y': round(self._imu_gyro[1], 2),
+            'gyro_z': round(self._imu_gyro[2], 2),
+            'temperature': round(self._imu_temperature, 1),
+            'mic_level': int(self._imu_mic_level),
+            'yaw_deg': round(self._imu_yaw_deg, 2),
+            'calibrated': bool(self._imu_calibrated),
+            'last_age_s': round(age, 3) if age is not None else None,
+            'rotate_active': bool(self._rotate_active),
+            'rotate_target_deg': self._rotate_target_deg,
+        }
+
+    def imu_calibrate(self) -> None:
+        """Trigger gyro re-calibration on the Arduino."""
+        msg = Empty()
+        self._imu_calibrate_pub.publish(msg)
+        self.get_logger().info("IMU calibration requested via web UI")
+
+    # ── Rotate-to-angle controller ────────────────────────────────────
+
+    def start_rotate(self, target_deg: float, speed: float = 0.5) -> None:
+        target_deg = max(-180.0, min(180.0, float(target_deg)))
+        speed = max(0.1, min(1.0, float(speed)))
+        self._rotate_target_deg = target_deg
+        self._rotate_speed = speed
+        self._rotate_active = True
+        self._rotate_in_tolerance_since = None
+        self.get_logger().info(f"Rotate to {target_deg:.1f}° at speed {speed:.1f}")
+
+    def stop_rotate(self) -> None:
+        self._rotate_active = False
+        self._rotate_target_deg = None
+        self._rotate_in_tolerance_since = None
+        # Send a stop command
+        msg = Twist()
+        self._cmd_pub.publish(msg)
+
+    def _rotate_tick(self) -> None:
+        if not self._rotate_active or self._rotate_target_deg is None:
+            return
+        if not self._imu_calibrated:
+            return
+
+        target = self._rotate_target_deg
+        current = self._imu_yaw_deg
+
+        # Compute shortest angular error (±180)
+        error = target - current
+        while error > 180.0:
+            error -= 360.0
+        while error < -180.0:
+            error += 360.0
+
+        now = time.monotonic()
+
+        # Check if within tolerance
+        if abs(error) < self._rotate_tolerance:
+            if self._rotate_in_tolerance_since is None:
+                self._rotate_in_tolerance_since = now
+            elif (now - self._rotate_in_tolerance_since) >= self._rotate_settle_sec:
+                # Done!
+                self.get_logger().info(
+                    f"Rotation complete: target={target:.1f}°, current={current:.1f}°, error={error:.1f}°"
+                )
+                self._rotate_active = False
+                msg = Twist()
+                self._cmd_pub.publish(msg)
+                return
+        else:
+            self._rotate_in_tolerance_since = None
+
+        # Proportional controller: angular velocity = Kp * error
+        # Cap at rotate_speed (which is 0..1 unit), then scale by max_angular_rps
+        raw_cmd = self._rotate_kp * error  # °/s-ish
+        # Convert error in degrees to a proportional output, cap at ±speed
+        # Kp=2.5 means at 10° error → 25°/s command, which we then map to unit
+        angular_unit = raw_cmd / 180.0  # normalize to rough ±1 range
+        angular_unit = max(-self._rotate_speed, min(self._rotate_speed, angular_unit))
+
+        # Ensure minimum rotation when error is significant but output would be tiny
+        min_unit = 0.12
+        if abs(error) > self._rotate_tolerance and abs(angular_unit) < min_unit:
+            angular_unit = min_unit if error > 0 else -min_unit
+
+        msg = Twist()
+        msg.angular.z = float(angular_unit) * float(self._max_angular_rps)
+        self._cmd_pub.publish(msg)
+        self._cmd_last_rx_monotonic = time.monotonic()
+        self._cmd_last_sent_monotonic = self._cmd_last_rx_monotonic
+
 
 def make_handler(
     *,
@@ -1012,6 +1521,10 @@ def make_handler(
     snapshot_taker=None,
     snapshot_dir=None,
     lightbar_setter=None,
+    imu_provider=None,
+    imu_calibrate=None,
+    rotate_starter=None,
+    rotate_stopper=None,
 ):
     boundary = b"--frame"
     fps = max(float(fps_limit), 1.0)
@@ -1105,6 +1618,26 @@ def make_handler(
                     return
                 self.send_response(HTTPStatus.NO_CONTENT)
                 self.end_headers()
+                return
+
+            if path == "/api/imu":
+                payload = {}
+                if callable(imu_provider):
+                    try:
+                        payload = imu_provider()
+                    except Exception:
+                        payload = {'error': 'imu_provider_failed'}
+                body = (json.dumps(payload) + "\n").encode("utf-8")
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-cache")
+                self.end_headers()
+                self.wfile.write(body)
+                try:
+                    self.wfile.flush()
+                except Exception:
+                    pass
                 return
 
             if path.startswith("/api/snapshots/"):
@@ -1518,6 +2051,67 @@ def make_handler(
                 self.end_headers()
                 return
 
+            if path == '/api/imu/rotate':
+                if not callable(rotate_starter):
+                    self.send_response(HTTPStatus.NOT_IMPLEMENTED)
+                    self.end_headers()
+                    return
+
+                try:
+                    length = int(self.headers.get('Content-Length', '0'))
+                except Exception:
+                    length = 0
+                if length <= 0 or length > 8192:
+                    self.send_response(HTTPStatus.BAD_REQUEST)
+                    self.end_headers()
+                    return
+
+                raw = self.rfile.read(length)
+                try:
+                    payload = json.loads(raw.decode('utf-8'))
+                    target_deg = float(payload.get('target_deg', 0))
+                    speed = float(payload.get('speed', 0.5))
+                except Exception:
+                    self.send_response(HTTPStatus.BAD_REQUEST)
+                    self.end_headers()
+                    return
+
+                try:
+                    rotate_starter(target_deg, speed)
+                except Exception:
+                    self.send_response(HTTPStatus.INTERNAL_SERVER_ERROR)
+                    self.end_headers()
+                    return
+
+                self.send_response(HTTPStatus.NO_CONTENT)
+                self.end_headers()
+                return
+
+            if path == '/api/imu/rotate/stop':
+                if not callable(rotate_stopper):
+                    self.send_response(HTTPStatus.NOT_IMPLEMENTED)
+                    self.end_headers()
+                    return
+                try:
+                    rotate_stopper()
+                except Exception:
+                    self.send_response(HTTPStatus.INTERNAL_SERVER_ERROR)
+                    self.end_headers()
+                    return
+                self.send_response(HTTPStatus.NO_CONTENT)
+                self.end_headers()
+                return
+
+            if path == '/api/imu/calibrate':
+                if callable(imu_calibrate):
+                    try:
+                        imu_calibrate()
+                    except Exception:
+                        pass
+                self.send_response(HTTPStatus.NO_CONTENT)
+                self.end_headers()
+                return
+
             self.send_response(HTTPStatus.NOT_FOUND)
             self.send_header('Content-Type', 'text/plain; charset=utf-8')
             self.end_headers()
@@ -1558,6 +2152,10 @@ def main() -> None:
         snapshot_taker=node.take_snapshot,
         snapshot_dir=str(node.get_parameter("snapshot_dir").value),
         lightbar_setter=node.set_lightbar_command,
+        imu_provider=node.get_imu_dict,
+        imu_calibrate=node.imu_calibrate,
+        rotate_starter=node.start_rotate,
+        rotate_stopper=node.stop_rotate,
     )
     httpd = ThreadingHTTPServer((bind, port), handler_cls)
     # Allow the serve loop to wake up periodically so Ctrl-C / rclpy shutdown is responsive.

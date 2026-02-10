@@ -4,8 +4,13 @@ import time
 import rclpy
 from geometry_msgs.msg import Twist
 from rclpy.node import Node
+from sensor_msgs.msg import Imu
+from std_msgs.msg import Bool
 
 from .i2c_car import I2CCar
+
+DEG_TO_RAD = math.pi / 180.0
+RAD_TO_DEG = 180.0 / math.pi
 
 
 def clamp(value: float, low: float, high: float) -> float:
@@ -47,6 +52,19 @@ class MotorDriverNode(Node):
         self.declare_parameter('startup_kick_pwm', 0)
         self.declare_parameter('startup_kick_duration_sec', 0.15)
 
+        # ── Gyro heading-hold parameters ──────────────────────────────
+        self.declare_parameter('gyro_heading_hold_enable', True)
+        # Proportional gain: PWM correction per (°/s of yaw drift).
+        # Positive drift → slow down right wheels / speed up left wheels.
+        self.declare_parameter('gyro_heading_hold_gain', 2.0)
+        # Max PWM correction applied by heading-hold (prevents wild swings)
+        self.declare_parameter('gyro_heading_hold_max_correction', 30.0)
+        # IMU topic to subscribe to for gyro data
+        self.declare_parameter('imu_topic', 'imu/data')
+        # Dead-band: don't correct if cmd_vel angular.z is above this (rad/s)
+        # i.e. heading-hold only engages when the user is driving "straight"
+        self.declare_parameter('gyro_heading_hold_deadband_rad', 0.05)
+
         i2c_bus = int(self.get_parameter('i2c_bus').value)
         i2c_addr = int(self.get_parameter('i2c_addr').value)
         i2c_protocol = str(self.get_parameter('i2c_protocol').value)
@@ -81,6 +99,17 @@ class MotorDriverNode(Node):
         self._startup_kick_duration = float(self.get_parameter('startup_kick_duration_sec').value)
         self._kick_until_time = 0.0
 
+        # ── Gyro heading-hold state ──────────────────────────────────
+        self._heading_hold_enable = bool(self.get_parameter('gyro_heading_hold_enable').value)
+        self._heading_hold_gain = float(self.get_parameter('gyro_heading_hold_gain').value)
+        self._heading_hold_max = float(self.get_parameter('gyro_heading_hold_max_correction').value)
+        self._heading_hold_deadband = float(self.get_parameter('gyro_heading_hold_deadband_rad').value)
+        self._imu_topic = str(self.get_parameter('imu_topic').value)
+        self._gyro_yaw_rate = 0.0  # latest gyro angular_velocity.z (rad/s)
+        self._gyro_correction = 0.0  # current correction PWM delta
+        self._cmd_angular_z = 0.0  # latest commanded angular.z from cmd_vel
+        self._imu_calibrated = False  # gated until imu/calibrated is True
+
         self._car = I2CCar(i2c_bus=i2c_bus, i2c_addr=i2c_addr, dry_run=dry_run, protocol=i2c_protocol)
 
         self._last_cmd_time = None
@@ -98,6 +127,16 @@ class MotorDriverNode(Node):
 
         self.create_subscription(Twist, 'cmd_vel', self._on_cmd_vel, 10)
         self._timer = self.create_timer(0.02, self._tick)  # 50Hz
+
+        # ── IMU subscription for heading-hold ─────────────────────────
+        if self._heading_hold_enable:
+            self.create_subscription(Imu, self._imu_topic, self._on_imu, 10)
+            self.create_subscription(Bool, 'imu/calibrated', self._on_imu_calibrated, 10)
+            self.get_logger().info(
+                f'Gyro heading-hold ENABLED (gain={self._heading_hold_gain}, '
+                f'max_corr={self._heading_hold_max}, deadband={self._heading_hold_deadband} rad/s). '
+                f'Waiting for IMU calibration...'
+            )
 
         if dry_run:
             self.get_logger().warn('Motor driver running in dry_run mode (no I2C writes).')
@@ -135,10 +174,50 @@ class MotorDriverNode(Node):
                 'strafe will be ignored and controller will behave like differential.'
             )
 
+    def _on_imu_calibrated(self, msg: Bool) -> None:
+        was = self._imu_calibrated
+        self._imu_calibrated = msg.data
+        if msg.data and not was:
+            self.get_logger().info('IMU calibrated — gyro heading-hold is now active')
+        elif not msg.data and was:
+            self.get_logger().warn('IMU calibration lost — heading-hold suspended')
+            self._gyro_correction = 0.0
+
+    def _on_imu(self, msg: Imu) -> None:
+        """Receive gyro data and compute heading-hold correction."""
+        self._gyro_yaw_rate = msg.angular_velocity.z  # rad/s
+
+        # Don't apply corrections until IMU is calibrated
+        if not self._imu_calibrated:
+            self._gyro_correction = 0.0
+            return
+
+        # Only apply heading-hold when the user wants to drive straight
+        # (commanded angular.z is near zero)
+        if abs(self._cmd_angular_z) > self._heading_hold_deadband:
+            # User is intentionally turning — don't fight it
+            self._gyro_correction = 0.0
+            return
+
+        # If robot isn't moving, no correction needed
+        if not self._is_any_motion_commanded():
+            self._gyro_correction = 0.0
+            return
+
+        # Proportional correction: if gyro says robot is drifting clockwise
+        # (negative yaw rate in ROS convention), add positive correction to
+        # steer left (slow right / speed up left).
+        # correction > 0 means "steer left", < 0 means "steer right"
+        raw_correction = -self._gyro_yaw_rate * RAD_TO_DEG * self._heading_hold_gain
+        self._gyro_correction = clamp(
+            raw_correction, -self._heading_hold_max, self._heading_hold_max
+        )
+
     def _on_cmd_vel(self, msg: Twist) -> None:
         vx = float(msg.linear.x)
         vy = float(getattr(msg.linear, 'y', 0.0))
         wz = float(msg.angular.z)
+        self._cmd_angular_z = wz  # stash for heading-hold
 
         if self._max_linear <= 0.0:
             self._left_pwm = 0.0
@@ -276,6 +355,16 @@ class MotorDriverNode(Node):
                 fr = self._apply_startup_kick(self._fr_pwm) if kick_active else self._fr_pwm
                 rl = self._apply_startup_kick(self._rl_pwm) if kick_active else self._rl_pwm
                 rr = self._apply_startup_kick(self._rr_pwm) if kick_active else self._rr_pwm
+
+                # ── Gyro heading-hold correction ──────────────────────
+                # correction > 0  → steer left → speed up left wheels, slow right
+                if self._heading_hold_enable and abs(self._gyro_correction) > 0.01:
+                    c = self._gyro_correction
+                    fl = clamp(fl + c, -self._max_pwm, self._max_pwm)
+                    rl = clamp(rl + c, -self._max_pwm, self._max_pwm)
+                    fr = clamp(fr - c, -self._max_pwm, self._max_pwm)
+                    rr = clamp(rr - c, -self._max_pwm, self._max_pwm)
+
                 self._car.set_motor_pwms(
                     fl,
                     fr,
@@ -290,6 +379,13 @@ class MotorDriverNode(Node):
             else:
                 left = self._apply_startup_kick(self._left_pwm) if kick_active else self._left_pwm
                 right = self._apply_startup_kick(self._right_pwm) if kick_active else self._right_pwm
+
+                # ── Gyro heading-hold correction (differential) ───────
+                if self._heading_hold_enable and abs(self._gyro_correction) > 0.01:
+                    c = self._gyro_correction
+                    left = clamp(left + c, -self._max_pwm, self._max_pwm)
+                    right = clamp(right - c, -self._max_pwm, self._max_pwm)
+
                 self._car.set_wheel_pwms(left, right, max_pwm=self._max_pwm)
             self._last_write_time = now
         except Exception as e:

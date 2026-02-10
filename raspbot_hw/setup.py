@@ -28,6 +28,7 @@ setup(
             'opencv_camera = raspbot_hw.opencv_camera_node:main',
             'camera_gimbal = raspbot_hw.camera_gimbal_node:main',
             'lightbar = raspbot_hw.lightbar_node:main',
+            'imu_serial = raspbot_hw.imu_serial_node:main',
             'oled = raspbot_hw.oled_node:main',
         ],
     },

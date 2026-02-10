@@ -40,6 +40,12 @@ motor_driver:
     write_hz: 20.0
     cmd_vel_timeout_sec: 0.5
     idle_stop_period_sec: 1.0
+    # Gyro heading-hold: uses IMU yaw rate to correct drift when driving straight.
+    gyro_heading_hold_enable: true
+    gyro_heading_hold_gain: 2.0        # PWM/°/s of yaw drift
+    gyro_heading_hold_max_correction: 30.0
+    gyro_heading_hold_deadband_rad: 0.05
+    imu_topic: "imu/data"
 
 ultrasonic:
   ros__parameters:
@@ -116,6 +122,12 @@ camera_gimbal:
     reset_on_shutdown: true
     command_timeout_sec: 0.0
     publish_hz: 20.0
+    # IMU tilt compensation: keeps camera level when robot pitches on inclines.
+    imu_tilt_compensation: true
+    imu_topic: "imu/data"
+    imu_tilt_gain: 1.0          # 1.0 = fully compensate measured pitch
+    imu_tilt_alpha: 0.85        # low-pass filter (0..1, higher = more smooth)
+    imu_tilt_sign: -1.0         # flip if compensation goes the wrong way
 
 lightbar:
   ros__parameters:
@@ -130,6 +142,31 @@ lightbar:
     startup_effect: "rainbow"
     startup_duration_sec: 3.0
     effect_fps: 30.0
+
+imu_serial:
+  ros__parameters:
+    serial_port: "/dev/ttyACM0"
+    baud_rate: 115200
+    serial_timeout_sec: 2.0
+    frame_id: "imu_link"
+    publish_hz: 100.0
+    # Always auto-calibrates gyro on every serial connection/reconnection.
+    # This delay lets the Arduino + USB settle before sending the calibrate command.
+    startup_calibrate_delay_sec: 1.0
+    # Axis remapping: indices into raw [ax,ay,az]/[gx,gy,gz] arrays.
+    # Adjust if the Arduino board is mounted in a non-standard orientation.
+    # Default: board X→ROS X (forward), Y→Y (left), Z→Z (up).
+    accel_axis_map: [0, 1, 2]
+    accel_axis_sign: [1.0, 1.0, 1.0]
+    gyro_axis_map: [0, 1, 2]
+    gyro_axis_sign: [1.0, 1.0, 1.0]
+    # Yaw integration (published on imu/yaw_deg)
+    enable_yaw_integration: true
+    yaw_gyro_axis: 2    # Z axis
+    yaw_gyro_sign: 1.0
+    # Noise / covariance (diagonal)
+    accel_variance: 0.01
+    gyro_variance: 0.001
 
 oled:
   ros__parameters:

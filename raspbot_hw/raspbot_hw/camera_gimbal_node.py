@@ -4,8 +4,12 @@ import time
 import rclpy
 from geometry_msgs.msg import Vector3
 from rclpy.node import Node
+from sensor_msgs.msg import Imu
+from std_msgs.msg import Bool
 
 from .i2c_car import I2CCar
+
+RAD_TO_DEG = 180.0 / math.pi
 
 
 def _clamp(x: float, lo: float, hi: float) -> float:
@@ -42,6 +46,18 @@ class CameraGimbalNode(Node):
         self.declare_parameter("reset_on_shutdown", True)
         self.declare_parameter("command_timeout_sec", 0.0)  # <=0 disables
         self.declare_parameter("publish_hz", 20.0)
+
+        # ── IMU tilt compensation ─────────────────────────────────────
+        # When enabled, the robot's pitch (from accelerometer) is added to the
+        # tilt servo command so the camera stays level on inclines/during accel.
+        self.declare_parameter("imu_tilt_compensation", True)
+        self.declare_parameter("imu_topic", "imu/data")
+        # How much of the measured pitch to compensate (1.0 = full, 0.0 = off).
+        self.declare_parameter("imu_tilt_gain", 1.0)
+        # Low-pass filter coefficient for pitch (0..1). Closer to 1 = more smoothing.
+        self.declare_parameter("imu_tilt_alpha", 0.85)
+        # Sign: +1 or -1, depending on how IMU pitch maps to tilt direction.
+        self.declare_parameter("imu_tilt_sign", -1.0)
 
         i2c_bus = int(self.get_parameter("i2c_bus").value)
         i2c_addr = int(self.get_parameter("i2c_addr").value)
@@ -84,7 +100,26 @@ class CameraGimbalNode(Node):
         if not self._reset_on_startup:
             self._did_startup_reset = True
 
+        # ── IMU tilt compensation state ───────────────────────────────
+        self._imu_tilt_comp = bool(self.get_parameter("imu_tilt_compensation").value)
+        self._imu_tilt_gain = float(self.get_parameter("imu_tilt_gain").value)
+        self._imu_tilt_alpha = float(self.get_parameter("imu_tilt_alpha").value)
+        self._imu_tilt_sign = float(self.get_parameter("imu_tilt_sign").value)
+        self._imu_pitch_deg = 0.0  # filtered pitch from accelerometer
+        self._imu_calibrated = False  # gated until imu/calibrated is True
+
         self.create_subscription(Vector3, topic, self._on_cmd, 10)
+
+        # ── IMU subscription ──────────────────────────────────────────
+        if self._imu_tilt_comp:
+            imu_topic = str(self.get_parameter("imu_topic").value)
+            self.create_subscription(Imu, imu_topic, self._on_imu, 10)
+            self.create_subscription(Bool, 'imu/calibrated', self._on_imu_calibrated, 10)
+            self.get_logger().info(
+                f"IMU tilt compensation ENABLED (gain={self._imu_tilt_gain}, "
+                f"alpha={self._imu_tilt_alpha}, sign={self._imu_tilt_sign}). "
+                f"Waiting for IMU calibration..."
+            )
 
         period = 1.0 / max(publish_hz, 1e-3)
         self._timer = self.create_timer(period, self._tick)
@@ -93,6 +128,35 @@ class CameraGimbalNode(Node):
             f"Camera gimbal ready (addr=0x{i2c_addr:02x}, pan_id={self._pan_id}, tilt_id={self._tilt_id}). "
             f"Command topic: {topic} (x=pan_deg, y=tilt_deg)"
         )
+
+    def _on_imu_calibrated(self, msg: Bool) -> None:
+        was = self._imu_calibrated
+        self._imu_calibrated = msg.data
+        if msg.data and not was:
+            self.get_logger().info('IMU calibrated — tilt compensation is now active')
+        elif not msg.data and was:
+            self.get_logger().warn('IMU calibration lost — tilt compensation suspended')
+            self._imu_pitch_deg = 0.0
+
+    def _on_imu(self, msg: Imu) -> None:
+        """Derive pitch from accelerometer and low-pass filter it."""
+        # Ignore data until gyro calibration is done (accel values may also
+        # be noisy during the calibration hold period)
+        if not self._imu_calibrated:
+            return
+        ax = msg.linear_acceleration.x
+        ay = msg.linear_acceleration.y
+        az = msg.linear_acceleration.z
+
+        # Pitch = atan2(ax, sqrt(ay² + az²)) — positive when nose is up
+        denom = math.sqrt(ay * ay + az * az)
+        if denom < 1e-6:
+            return
+        raw_pitch_deg = math.atan2(ax, denom) * RAD_TO_DEG
+
+        # Exponential low-pass filter to smooth vibration
+        alpha = self._imu_tilt_alpha
+        self._imu_pitch_deg = alpha * self._imu_pitch_deg + (1.0 - alpha) * raw_pitch_deg
 
     def _on_cmd(self, msg: Vector3) -> None:
         pan = float(msg.x)
@@ -106,6 +170,10 @@ class CameraGimbalNode(Node):
         self._last_cmd_time = time.monotonic()
 
     def _apply(self, pan_deg: float, tilt_deg: float) -> None:
+        # Apply IMU tilt compensation: offset the tilt servo to counteract robot pitch
+        if self._imu_tilt_comp:
+            compensation = self._imu_tilt_sign * self._imu_pitch_deg * self._imu_tilt_gain
+            tilt_deg = _clamp(tilt_deg + compensation, self._tilt_min, self._tilt_max)
         self._car.set_servo(self._pan_id, pan_deg)
         self._car.set_servo(self._tilt_id, tilt_deg)
 
