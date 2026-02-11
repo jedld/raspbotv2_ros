@@ -44,16 +44,17 @@ motor_driver:
     # driving straight.  The integral term learns constant motor asymmetry so
     # subsequent drives are corrected immediately.
     gyro_heading_hold_enable: true
-    gyro_heading_hold_gain: 2.0        # Kp: PWM per degree of heading error
-    gyro_heading_hold_ki: 1.5          # Ki: integral (learns DC asymmetry fast)
-    gyro_heading_hold_kd: 0.8          # Kd: derivative (gyro rate damping)
+    gyro_heading_hold_gain: 1.2        # Kp: PWM per degree of heading error
+    gyro_heading_hold_ki: 0.5          # Ki: integral (learns DC asymmetry)
+    gyro_heading_hold_kd: 0.3          # Kd: derivative (gyro rate damping)
     gyro_heading_hold_max_correction: 30.0
     gyro_heading_hold_deadband_rad: 0.05
     gyro_heading_hold_integral_max: 20.0  # anti-windup limit (PWM·s)
     # Correction sign: set to -1.0 if the heading-hold makes drift WORSE.
     # Watch the [heading-hold] diagnostic log: if "err" grows while "corr" is
     # non-zero, flip this sign.
-    heading_hold_sign: -1.0
+    # NOTE: +1.0 is correct with BNO055 axis remap (firmware ≥2.1.0).
+    heading_hold_sign: 1.0
     # Diagnostic log interval (seconds). Prints PID state periodically. 0 disables.
     heading_hold_diag_interval_sec: 2.0
     imu_topic: "imu/data"

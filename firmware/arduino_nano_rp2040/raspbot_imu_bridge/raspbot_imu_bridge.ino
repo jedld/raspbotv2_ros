@@ -117,7 +117,7 @@
 #include <utility/imumaths.h>
 
 // ── Tunables ─────────────────────────────────────────────────────────
-#define FIRMWARE_VERSION   "2.0.0"
+#define FIRMWARE_VERSION   "2.2.0"
 #define DEFAULT_HZ         100        // default output rate
 #define SERIAL_BAUD        115200
 #define MIC_SAMPLE_RATE    16000      // Hz
@@ -151,6 +151,72 @@ static unsigned long    g_interval_us  = 1000000UL / DEFAULT_HZ;
 static unsigned long    g_last_send_us = 0;
 static unsigned long    g_last_grv_us  = 0;
 static unsigned long    g_grv_interval = 1000000UL / GRAVITY_HZ;
+
+// ── LSM6DSOX software axis remap ─────────────────────────────────────
+// Detected at calibration time so the $IMU output is always in a
+// standard frame with Z = up, regardless of board mounting.
+static int   g_lsm_src[3]  = {0, 1, 2};            // identity
+static float g_lsm_sign[3] = {1.0f, 1.0f, 1.0f};
+
+// ── Auto-orient helpers ──────────────────────────────────────────────
+
+// Find which axis has the dominant gravity component.
+// Returns 0=X, 1=Y, 2=Z and sets *positive = true if gravity is positive.
+static int detectUpAxis(float x, float y, float z, bool *positive) {
+  float av[3] = {fabs(x), fabs(y), fabs(z)};
+  int up = 0;
+  if (av[1] > av[up]) up = 1;
+  if (av[2] > av[up]) up = 2;
+  float raw[3] = {x, y, z};
+  *positive = (raw[up] > 0);
+  return up;
+}
+
+// Compute right-handed axis remap so output Z = up.
+// Fills src[3] (which physical axis feeds each output axis) and
+// sgn[3] (sign multiplier for each output axis).
+static void computeRemap(int up_axis, bool up_pos, int src[3], float sgn[3]) {
+  switch (up_axis) {
+    case 0:  // Physical X is vertical
+      // out_X = ±Z, out_Y = Y, out_Z = ±X  (right-handed)
+      src[0] = 2; src[1] = 1; src[2] = 0;
+      if (up_pos) {
+        sgn[0] = -1.0f; sgn[1] = 1.0f; sgn[2] = 1.0f;
+      } else {
+        sgn[0] = 1.0f;  sgn[1] = 1.0f; sgn[2] = -1.0f;
+      }
+      break;
+    case 1:  // Physical Y is vertical
+      // out_X = X, out_Y = ±Z, out_Z = ±Y
+      src[0] = 0; src[1] = 2; src[2] = 1;
+      if (up_pos) {
+        sgn[0] = 1.0f; sgn[1] = -1.0f; sgn[2] = 1.0f;
+      } else {
+        sgn[0] = 1.0f; sgn[1] = 1.0f;  sgn[2] = -1.0f;
+      }
+      break;
+    case 2:  // Physical Z is vertical (most common)
+    default:
+      src[0] = 0; src[1] = 1; src[2] = 2;
+      if (up_pos) {
+        sgn[0] = 1.0f; sgn[1] = 1.0f;  sgn[2] = 1.0f;
+      } else {
+        sgn[0] = 1.0f; sgn[1] = -1.0f; sgn[2] = -1.0f;
+      }
+      break;
+  }
+}
+
+// Convert the generic remap into BNO055 hardware register values.
+// BNO055 AXIS_MAP_CONFIG (0x41): (z_src << 4) | (y_src << 2) | x_src
+// BNO055 AXIS_MAP_SIGN  (0x42): (x_neg << 2) | (y_neg << 1) | z_neg
+static void remapToBNO055Regs(const int src[3], const float sgn[3],
+                               uint8_t &cfg, uint8_t &sign) {
+  cfg  = (uint8_t)((src[2] << 4) | (src[1] << 2) | src[0]);
+  sign = (uint8_t)(((sgn[0] < 0 ? 1 : 0) << 2) |
+                    ((sgn[1] < 0 ? 1 : 0) << 1) |
+                     (sgn[2] < 0 ? 1 : 0));
+}
 
 // ── Audio streaming ──────────────────────────────────────────────────
 #define AUD_RING_SIZE      2048
@@ -252,9 +318,29 @@ void calibrateGyro() {
   }
 
   if (na > 0) {
-    g_accel_offset[0] = sax / na;
-    g_accel_offset[1] = say / na;
-    g_accel_offset[2] = (saz / na) - 1.0f;
+    float avg[3] = {sax / na, say / na, saz / na};
+
+    // ── Auto-detect LSM6DSOX mounting orientation ──────────────────
+    // Find which raw axis carries gravity (~1 g) and its sign.
+    // Compute a software axis remap so the $IMU output always has
+    // Z = up, regardless of how the Arduino board is mounted.
+    bool up_pos;
+    int  up_axis = detectUpAxis(avg[0], avg[1], avg[2], &up_pos);
+    float g_sign = up_pos ? 1.0f : -1.0f;
+    computeRemap(up_axis, up_pos, g_lsm_src, g_lsm_sign);
+
+    // Accel offset: subtract gravity from the dominant axis so that
+    // the offset-corrected value retains only ±1 g on that axis and
+    // ~0 on the others.  After the software remap the output Z will
+    // always read +1 g at rest.
+    g_accel_offset[0] = avg[0];
+    g_accel_offset[1] = avg[1];
+    g_accel_offset[2] = avg[2];
+    g_accel_offset[up_axis] -= g_sign;  // keep 1 g on gravity axis
+
+    Serial.print("$MSG,LSM6DSOX auto-orient: gravity on ");
+    Serial.print("XYZ"[up_axis]);
+    Serial.println(up_pos ? "+" : "-");
   }
 
   Serial.print("$CAL,done,");
@@ -271,11 +357,56 @@ void calibrateGyro() {
 
 // ── BNO055 initialization ────────────────────────────────────────────
 bool initBNO055() {
+  // ── Phase 1: probe in ACCONLY to read raw gravity for orientation ──
+  if (!bno.begin(OPERATION_MODE_ACCONLY)) {
+    return false;
+  }
+  delay(200);  // let accelerometer stabilise
+
+  float sx = 0, sy = 0, sz = 0;
+  for (int i = 0; i < 10; i++) {
+    imu::Vector<3> a = bno.getVector(Adafruit_BNO055::VECTOR_ACCELEROMETER);
+    sx += a.x();  sy += a.y();  sz += a.z();
+    delay(20);
+  }
+  sx /= 10;  sy /= 10;  sz /= 10;
+
+  bool up_pos;
+  int  up_axis = detectUpAxis(sx, sy, sz, &up_pos);
+
+  int  remap_src[3];
+  float remap_sgn[3];
+  computeRemap(up_axis, up_pos, remap_src, remap_sgn);
+
+  uint8_t cfg, sgn;
+  remapToBNO055Regs(remap_src, remap_sgn, cfg, sgn);
+
+  // ── Phase 2: fresh start in NDOF (known-good pattern from v2.0.1) ─
+  // begin() resets the chip, so we get a clean slate for fusion.
   if (!bno.begin(OPERATION_MODE_NDOF)) {
     return false;
   }
   delay(100);
+
+  // Apply hardware axis remap (these internally switch to CONFIG mode)
+  bno.setAxisRemap((Adafruit_BNO055::adafruit_bno055_axis_remap_config_t)cfg);
+  bno.setAxisSign((Adafruit_BNO055::adafruit_bno055_axis_remap_sign_t)sgn);
+
   bno.setExtCrystalUse(true);
+  delay(50);
+
+  // Re-enter NDOF after crystal + remap changes (restart fusion engine)
+  bno.setMode(OPERATION_MODE_NDOF);
+  delay(100);
+
+  Serial.print("$MSG,BNO055 auto-orient: gravity on ");
+  Serial.print("XYZ"[up_axis]);
+  Serial.print(up_pos ? "+" : "-");
+  Serial.print(" -> remap=0x");
+  Serial.print(cfg, HEX);
+  Serial.print(",sign=0x");
+  Serial.println(sgn, HEX);
+
   return true;
 }
 
@@ -478,21 +609,29 @@ void loop() {
   g_last_send_us = now_us;
 
   // ---- Read on-board IMU (LSM6DSOX) ----
-  float ax = 0, ay = 0, az = 0;
-  float gx = 0, gy = 0, gz = 0;
+  float raw_a[3] = {0, 0, 0};
+  float raw_g[3] = {0, 0, 0};
 
   if (IMU.accelerationAvailable()) {
-    IMU.readAcceleration(ax, ay, az);
-    ax -= g_accel_offset[0];
-    ay -= g_accel_offset[1];
-    az -= g_accel_offset[2];
+    IMU.readAcceleration(raw_a[0], raw_a[1], raw_a[2]);
+    raw_a[0] -= g_accel_offset[0];
+    raw_a[1] -= g_accel_offset[1];
+    raw_a[2] -= g_accel_offset[2];
   }
   if (IMU.gyroscopeAvailable()) {
-    IMU.readGyroscope(gx, gy, gz);
-    gx -= g_gyro_offset[0];
-    gy -= g_gyro_offset[1];
-    gz -= g_gyro_offset[2];
+    IMU.readGyroscope(raw_g[0], raw_g[1], raw_g[2]);
+    raw_g[0] -= g_gyro_offset[0];
+    raw_g[1] -= g_gyro_offset[1];
+    raw_g[2] -= g_gyro_offset[2];
   }
+
+  // Apply software axis remap → standard frame (Z = up)
+  float ax = g_lsm_sign[0] * raw_a[g_lsm_src[0]];
+  float ay = g_lsm_sign[1] * raw_a[g_lsm_src[1]];
+  float az = g_lsm_sign[2] * raw_a[g_lsm_src[2]];
+  float gx = g_lsm_sign[0] * raw_g[g_lsm_src[0]];
+  float gy = g_lsm_sign[1] * raw_g[g_lsm_src[1]];
+  float gz = g_lsm_sign[2] * raw_g[g_lsm_src[2]];
 
   // ---- Read temperature (throttled) ----
   unsigned long now_ms = millis();

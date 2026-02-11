@@ -118,6 +118,9 @@ class ImuSerialNode(Node):
         self._bno_available = False  # True once we receive a $BNO line
         self._bno_cal = {'sys': 0, 'gyro': 0, 'accel': 0, 'mag': 0}
         self._bno_msg_counter = 0
+        # Stashed LSM6DSOX gyro (high-resolution, auto-oriented by firmware)
+        # Used as angular_velocity source even when BNO055 provides orientation.
+        self._lsm_gyro_rad = [0.0, 0.0, 0.0]
 
         # ── Publishers ────────────────────────────────────────────────
         self._imu_pub = self.create_publisher(Imu, 'imu/data', 10)
@@ -380,11 +383,17 @@ class ImuSerialNode(Node):
         mic_msg.data = mic
         self._mic_pub.publish(mic_msg)
 
-        # ── If BNO055 is active, skip LSM6DSOX-based imu/data + yaw ──
-        # The $BNO handler publishes superior fused orientation.
-        # We still publish temperature from $IMU when BNO055 is providing
-        # its own temp (but $IMU temp is the LSM6DSOX die — different).
+        # ── If BNO055 is active, stash LSM6DSOX gyro for use in $BNO ─
+        # The BNO055 gyro is quantised to 0.0625 rad/s steps, which is
+        # too coarse for smooth PID heading-hold.  The LSM6DSOX on-board
+        # gyro has much finer resolution and is already auto-oriented
+        # by firmware v2.2.0, so we use it for angular_velocity while
+        # keeping BNO055's superior fused orientation + linear accel.
         if self._bno_available:
+            gyro_raw = [raw_gx, raw_gy, raw_gz]
+            self._lsm_gyro_rad[0] = self._gyro_sign[0] * gyro_raw[self._gyro_map[0]] * DEG_TO_RAD
+            self._lsm_gyro_rad[1] = self._gyro_sign[1] * gyro_raw[self._gyro_map[1]] * DEG_TO_RAD
+            self._lsm_gyro_rad[2] = self._gyro_sign[2] * gyro_raw[self._gyro_map[2]] * DEG_TO_RAD
             return
 
         # ── Fallback: LSM6DSOX-only mode (no BNO055) ─────────────────
@@ -518,9 +527,12 @@ class ImuSerialNode(Node):
         imu_msg.orientation.z = qz
         imu_msg.orientation_covariance = self._orient_cov[:]
 
-        imu_msg.angular_velocity.x = gx
-        imu_msg.angular_velocity.y = gy
-        imu_msg.angular_velocity.z = gz
+        # Use LSM6DSOX gyro (high-resolution, auto-oriented) instead of
+        # BNO055 gyro (quantised to 0.0625 rad/s).  This gives the PID
+        # heading-hold smooth derivative feedback.
+        imu_msg.angular_velocity.x = self._lsm_gyro_rad[0]
+        imu_msg.angular_velocity.y = self._lsm_gyro_rad[1]
+        imu_msg.angular_velocity.z = self._lsm_gyro_rad[2]
         imu_msg.angular_velocity_covariance = self._gyro_cov[:]
 
         imu_msg.linear_acceleration.x = ax

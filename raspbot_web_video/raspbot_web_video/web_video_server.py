@@ -1,3 +1,4 @@
+import math
 import threading
 import time
 from dataclasses import dataclass
@@ -949,13 +950,11 @@ INDEX_HTML = """<!doctype html>
 
         function updateCube(d) {
             if (!d) return;
-            // Pitch from accel: atan2(ax, sqrt(ay²+az²))
-            const ax = d.accel_x || 0;
-            const ay = d.accel_y || 0;
-            const az = d.accel_z || 0;
-            const pitch = Math.atan2(ax, Math.sqrt(ay*ay + az*az)) * (180/Math.PI);
-            const roll = Math.atan2(-ay, az) * (180/Math.PI);
-            const yaw = d.yaw_deg || 0;
+            // Server computes pitch/roll from BNO055 quaternion when
+            // available, falling back to accel-trig for LSM6DSOX.
+            const pitch = d.pitch_deg || 0;
+            const roll  = d.roll_deg  || 0;
+            const yaw   = d.yaw_deg   || 0;
 
             // CSS transform: rotations applied in order
             imuCube.style.transform = 'rotateX(' + (-pitch).toFixed(1) + 'deg) rotateZ(' + (roll).toFixed(1) + 'deg) rotateY(' + (-yaw).toFixed(1) + 'deg)';
@@ -1789,6 +1788,9 @@ class WebVideoNode(Node):
 
         self._imu_accel = [0.0, 0.0, 0.0]
         self._imu_gyro = [0.0, 0.0, 0.0]
+        self._imu_pitch_deg = 0.0
+        self._imu_roll_deg = 0.0
+        self._imu_has_quaternion = False
         self._imu_temperature = 0.0
         self._imu_mic_level = 0
         self._imu_yaw_deg = 0.0
@@ -2215,6 +2217,43 @@ class WebVideoNode(Node):
         ]
         self._imu_last_monotonic = time.monotonic()
 
+        # ── Extract pitch / roll for the 3D cube ─────────────────────
+        # orientation_covariance[0] >= 0  →  BNO055 quaternion valid
+        # orientation_covariance[0] == -1 →  LSM6DSOX only (no orientation)
+        if msg.orientation_covariance[0] >= 0.0:
+            qw = msg.orientation.w
+            qx = msg.orientation.x
+            qy = msg.orientation.y
+            qz = msg.orientation.z
+            # Project world "up" into the body frame via the quaternion
+            # rotation matrix.  This gives an accelerometer-equivalent
+            # gravity reading (positive Z = up) regardless of sensor
+            # mounting orientation — exactly what the 3D cube needs.
+            #   accel_eq = −row₂(R)   where R is the body→world matrix
+            ax_eq = 2.0 * (qw * qy - qx * qz)
+            ay_eq = -2.0 * (qw * qx + qy * qz)
+            az_eq = 2.0 * (qx * qx + qy * qy) - 1.0
+            denom_p = ay_eq * ay_eq + az_eq * az_eq
+            self._imu_pitch_deg = math.degrees(
+                math.atan2(ax_eq, math.sqrt(denom_p))
+            ) if denom_p > 1e-6 else 0.0
+            self._imu_roll_deg = math.degrees(
+                math.atan2(-ay_eq, az_eq)
+            ) if (abs(az_eq) > 1e-6 or abs(ay_eq) > 1e-6) else 0.0
+            self._imu_has_quaternion = True
+        else:
+            # Fallback: derive pitch/roll from raw accelerometer
+            ax = msg.linear_acceleration.x
+            ay = msg.linear_acceleration.y
+            az = msg.linear_acceleration.z
+            self._imu_pitch_deg = math.degrees(
+                math.atan2(ax, math.sqrt(ay * ay + az * az))
+            ) if (ay * ay + az * az) > 0.001 else 0.0
+            self._imu_roll_deg = math.degrees(
+                math.atan2(-ay, az)
+            ) if abs(az) > 0.001 else 0.0
+            self._imu_has_quaternion = False
+
     def _on_imu_yaw(self, msg: Float64) -> None:
         self._imu_yaw_deg = msg.data
 
@@ -2446,6 +2485,9 @@ class WebVideoNode(Node):
             'temperature': round(self._imu_temperature, 1),
             'mic_level': int(self._imu_mic_level),
             'yaw_deg': round(self._imu_yaw_deg, 2),
+            'pitch_deg': round(self._imu_pitch_deg, 2),
+            'roll_deg': round(self._imu_roll_deg, 2),
+            'has_quaternion': bool(self._imu_has_quaternion),
             'calibrated': bool(self._imu_calibrated),
             'last_age_s': round(age, 3) if age is not None else None,
             'rotate_active': bool(self._rotate_active),

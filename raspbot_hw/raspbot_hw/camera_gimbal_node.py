@@ -139,20 +139,39 @@ class CameraGimbalNode(Node):
             self._imu_pitch_deg = 0.0
 
     def _on_imu(self, msg: Imu) -> None:
-        """Derive pitch from accelerometer and low-pass filter it."""
-        # Ignore data until gyro calibration is done (accel values may also
-        # be noisy during the calibration hold period)
+        """Derive pitch from IMU and low-pass filter it.
+
+        When BNO055 is available the orientation quaternion carries a
+        sensor-fused attitude that is immune to translational acceleration.
+        We detect this by checking orientation_covariance[0] — a value of
+        -1 means "orientation unknown" (LSM6DSOX-only fallback), any other
+        value means the quaternion is valid (BNO055 NDOF mode).
+
+        Fallback: derive pitch from accelerometer trigonometry (noisy when
+        the robot accelerates / brakes, but adequate when stationary).
+        """
         if not self._imu_calibrated:
             return
-        ax = msg.linear_acceleration.x
-        ay = msg.linear_acceleration.y
-        az = msg.linear_acceleration.z
 
-        # Pitch = atan2(ax, sqrt(ay² + az²)) — positive when nose is up
-        denom = math.sqrt(ay * ay + az * az)
-        if denom < 1e-6:
-            return
-        raw_pitch_deg = math.atan2(ax, denom) * RAD_TO_DEG
+        quat_valid = msg.orientation_covariance[0] >= 0.0
+
+        if quat_valid:
+            # ── BNO055 path: extract pitch from fused quaternion ──────
+            q = msg.orientation
+            # Pitch (rotation about Y in NED / body-frame convention)
+            #   sinp = 2(qw·qy − qz·qx)
+            sinp = 2.0 * (q.w * q.y - q.z * q.x)
+            sinp = max(-1.0, min(1.0, sinp))
+            raw_pitch_deg = math.asin(sinp) * RAD_TO_DEG
+        else:
+            # ── LSM6DSOX fallback: accelerometer-only pitch ───────────
+            ax = msg.linear_acceleration.x
+            ay = msg.linear_acceleration.y
+            az = msg.linear_acceleration.z
+            denom = math.sqrt(ay * ay + az * az)
+            if denom < 1e-6:
+                return
+            raw_pitch_deg = math.atan2(ax, denom) * RAD_TO_DEG
 
         # Exponential low-pass filter to smooth vibration
         alpha = self._imu_tilt_alpha

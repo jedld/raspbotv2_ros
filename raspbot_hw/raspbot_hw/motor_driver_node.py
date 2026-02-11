@@ -161,6 +161,7 @@ class MotorDriverNode(Node):
         self._gyro_correction = 0.0  # current correction PWM delta
         self._cmd_angular_z = 0.0  # latest commanded angular.z from cmd_vel
         self._imu_calibrated = False  # gated until imu/calibrated is True
+        self._imu_has_quaternion = False  # True when BNO055 fused orientation is available
 
         # PID extended state
         self._heading_hold_ki = float(self.get_parameter('gyro_heading_hold_ki').value)
@@ -391,9 +392,17 @@ class MotorDriverNode(Node):
         self._imu_yaw_deg = msg.data
 
     def _on_imu(self, msg: Imu) -> None:
-        """PID heading-hold + lateral drift correction using IMU data."""
+        """PID heading-hold + lateral drift correction using IMU data.
+
+        When BNO055 is present, orientation_covariance[0] >= 0 and the
+        linear_acceleration is already gravity-subtracted (true inertial).
+        When LSM6DSOX-only, covariance[0] == -1 and linear_acceleration
+        includes gravity — the lateral correction uses higher filtering.
+        """
         self._gyro_yaw_rate = msg.angular_velocity.z  # rad/s
         accel_y = msg.linear_acceleration.y            # lateral m/s²
+        # Track whether we have fused orientation (BNO055) for later use
+        self._imu_has_quaternion = msg.orientation_covariance[0] >= 0.0
 
         # ── Gate: wait for calibration ────────────────────────────────
         if not self._imu_calibrated:
@@ -493,12 +502,21 @@ class MotorDriverNode(Node):
             )
 
         # ── Lateral drift correction (accelerometer, mecanum) ─────────
+        # When BNO055 is active, linear_acceleration is gravity-subtracted
+        # so we can use a tighter threshold and less aggressive filtering.
         if self._lateral_drift_enable:
-            alpha = self._lateral_drift_alpha
+            if getattr(self, '_imu_has_quaternion', False):
+                # BNO055: gravity already removed → cleaner signal
+                alpha = max(self._lateral_drift_alpha - 0.1, 0.3)
+                threshold = 0.08  # m/s²
+            else:
+                # LSM6DSOX: raw accel includes gravity → more filtering
+                alpha = self._lateral_drift_alpha
+                threshold = 0.15  # m/s²
             self._lateral_accel_filtered = (
                 alpha * accel_y + (1.0 - alpha) * self._lateral_accel_filtered
             )
-            if abs(self._lateral_accel_filtered) > 0.15:  # m/s² threshold
+            if abs(self._lateral_accel_filtered) > threshold:
                 raw_lat = -self._lateral_drift_gain * self._lateral_accel_filtered
                 self._lateral_correction = clamp(
                     raw_lat, -self._lateral_drift_max, self._lateral_drift_max
