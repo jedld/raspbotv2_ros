@@ -6,7 +6,7 @@ from geometry_msgs.msg import Twist
 from rcl_interfaces.msg import SetParametersResult
 from rclpy.node import Node
 from sensor_msgs.msg import Imu, Range
-from std_msgs.msg import Bool, Float64
+from std_msgs.msg import Bool, Float64, Int32
 
 from .i2c_car import I2CCar
 
@@ -104,6 +104,19 @@ class MotorDriverNode(Node):
         self.declare_parameter('collision_ultrasonic_topic', 'ultrasonic/range')
         self.declare_parameter('collision_failsafe_timeout_sec', 1.0)  # stale data timeout
 
+        # ── Cliff / edge failsafe (line-tracker) ───────────────────────
+        # Uses the downward-facing IR reflectance sensors (line trackers) to
+        # detect when the floor disappears (stairs, table edge, hole).
+        # Sensor value 1 = no floor / edge detected, 0 = floor present.
+        # Blocks forward motion when ANY sensor sees no floor.
+        self.declare_parameter('cliff_failsafe_enable', True)
+        self.declare_parameter('cliff_tracking_topic', 'tracking/state')
+        self.declare_parameter('cliff_failsafe_timeout_sec', 1.0)  # stale data timeout
+        # Bit mask: which sensors to use for cliff detection.
+        # Default 0b1111 = all four (L1, L2, R1, R2).
+        # Set to e.g. 0b0101 (5) to use only L1 + R1 (outer sensors).
+        self.declare_parameter('cliff_sensor_mask', 15)
+
         i2c_bus = int(self.get_parameter('i2c_bus').value)
         i2c_addr = int(self.get_parameter('i2c_addr').value)
         i2c_protocol = str(self.get_parameter('i2c_protocol').value)
@@ -194,6 +207,16 @@ class MotorDriverNode(Node):
         self._collision_active = False  # True when forward motion is being blocked
         self._collision_logged = False  # avoid log spam
 
+        # ── Cliff failsafe state ──────────────────────────────────────
+        self._cliff_enable = bool(self.get_parameter('cliff_failsafe_enable').value)
+        self._cliff_topic = str(self.get_parameter('cliff_tracking_topic').value)
+        self._cliff_timeout = float(self.get_parameter('cliff_failsafe_timeout_sec').value)
+        self._cliff_sensor_mask = int(self.get_parameter('cliff_sensor_mask').value) & 0x0F
+        self._cliff_state = 0  # latest tracking/state (4-bit)
+        self._cliff_last_time = 0.0
+        self._cliff_active = False
+        self._cliff_logged = False
+
         self._car = I2CCar(i2c_bus=i2c_bus, i2c_addr=i2c_addr, dry_run=dry_run, protocol=i2c_protocol)
 
         self._last_cmd_time = None
@@ -235,6 +258,24 @@ class MotorDriverNode(Node):
                 Range, self._collision_topic, self._on_ultrasonic, 10
             )
             self.get_logger().info('Collision failsafe DISABLED (can be enabled via topic or param)')
+
+        # ── Cliff failsafe subscription & publisher ───────────────────
+        self._cliff_enable_sub = self.create_subscription(
+            Bool, 'cliff_failsafe/enable', self._on_cliff_enable, 10
+        )
+        self._cliff_active_pub = self.create_publisher(
+            Bool, 'cliff_failsafe/active', 10
+        )
+        self.create_subscription(
+            Int32, self._cliff_topic, self._on_tracking_state, 10
+        )
+        if self._cliff_enable:
+            self.get_logger().info(
+                f'Cliff failsafe ENABLED (topic={self._cliff_topic}, '
+                f'mask=0b{self._cliff_sensor_mask:04b})'
+            )
+        else:
+            self.get_logger().info('Cliff failsafe DISABLED (can be enabled via topic or param)')
 
         # ── IMU subscriptions for heading-hold ────────────────────────
         if self._heading_hold_enable:
@@ -316,6 +357,7 @@ class MotorDriverNode(Node):
     }
     _TUNABLE_BOOL_PARAMS = {
         'collision_failsafe_enable': '_collision_enable',
+        'cliff_failsafe_enable': '_cliff_enable',
     }
 
     def _on_param_change(self, params) -> SetParametersResult:
@@ -578,6 +620,106 @@ class MotorDriverNode(Node):
                 self._collision_logged = False
             return vx
 
+    # ── Cliff / edge failsafe (line-tracker sensors) ─────────────────
+
+    def _on_tracking_state(self, msg: Int32) -> None:
+        """Receive 4-bit line-tracker state (bit=1 → sensor sees no floor)."""
+        self._cliff_state = int(msg.data) & 0x0F
+        self._cliff_last_time = time.time()
+
+    def _on_cliff_enable(self, msg: Bool) -> None:
+        """Enable/disable cliff failsafe via topic (from web UI)."""
+        was = self._cliff_enable
+        self._cliff_enable = msg.data
+        if msg.data and not was:
+            self.get_logger().info(
+                f'Cliff failsafe ENABLED via topic '
+                f'(mask=0b{self._cliff_sensor_mask:04b})'
+            )
+        elif not msg.data and was:
+            self.get_logger().info('Cliff failsafe DISABLED via topic')
+            self._cliff_active = False
+            self._cliff_logged = False
+            b = Bool()
+            b.data = False
+            self._cliff_active_pub.publish(b)
+
+    def _apply_cliff_failsafe(self, vx: float) -> float:
+        """Block forward motion when line-tracker sensors detect no floor.
+
+        Returns modified vx.  Backward motion (vx < 0) is never blocked,
+        allowing the robot to reverse away from an edge.
+        """
+        if not self._cliff_enable:
+            if self._cliff_active:
+                self._cliff_active = False
+                self._cliff_logged = False
+                b = Bool()
+                b.data = False
+                self._cliff_active_pub.publish(b)
+            return vx
+
+        # If tracking data is stale, don't block (sensor might be offline)
+        if (time.time() - self._cliff_last_time) > self._cliff_timeout:
+            if self._cliff_active:
+                self._cliff_active = False
+                self._cliff_logged = False
+                b = Bool()
+                b.data = False
+                self._cliff_active_pub.publish(b)
+            return vx
+
+        # Only restrict forward motion (positive vx)
+        if vx <= 0.0:
+            was_active = self._cliff_active
+            self._cliff_active = False
+            if was_active:
+                self._cliff_logged = False
+                b = Bool()
+                b.data = False
+                self._cliff_active_pub.publish(b)
+            return vx
+
+        # Check if ANY masked sensor sees no floor (bit = 0 means no floor).
+        # Sensors read 1 when floor is present, 0 when no floor / edge.
+        missing = (~self._cliff_state) & self._cliff_sensor_mask
+        if missing:
+            if not self._cliff_logged:
+                # Decode which sensors see no floor (bit=0)
+                names = []
+                if missing & 0x01:
+                    names.append('L1')
+                if missing & 0x02:
+                    names.append('L2')
+                if missing & 0x04:
+                    names.append('R1')
+                if missing & 0x08:
+                    names.append('R2')
+                self.get_logger().warn(
+                    f'[cliff-failsafe] STOP — no floor detected by sensor(s): '
+                    f'{", ".join(names)} (state=0b{self._cliff_state:04b})'
+                )
+                self._cliff_logged = True
+            if not self._cliff_active:
+                self._cliff_active = True
+                b = Bool()
+                b.data = True
+                self._cliff_active_pub.publish(b)
+            return 0.0
+        else:
+            # All masked sensors see floor — clear
+            was_active = self._cliff_active
+            self._cliff_active = False
+            if was_active:
+                self._cliff_logged = False
+                self.get_logger().info('[cliff-failsafe] clear — floor detected')
+                b = Bool()
+                b.data = False
+                self._cliff_active_pub.publish(b)
+            elif self._cliff_logged:
+                self._cliff_logged = False
+            return vx
+
     def _on_cmd_vel(self, msg: Twist) -> None:
         vx = float(msg.linear.x)
         vy = float(getattr(msg.linear, 'y', 0.0))
@@ -586,6 +728,9 @@ class MotorDriverNode(Node):
 
         # ── Apply collision failsafe before kinematics ────────────────
         vx = self._apply_collision_failsafe(vx)
+
+        # ── Apply cliff failsafe (line-tracker edge detection) ────────
+        vx = self._apply_cliff_failsafe(vx)
 
         if self._max_linear <= 0.0:
             self._left_pwm = 0.0

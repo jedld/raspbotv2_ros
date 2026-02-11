@@ -102,6 +102,19 @@ INDEX_HTML = """<!doctype html>
             </div>
         </div>
 
+        <div class=\"card\" id=\"cliffCard\">
+            <h2>&#9888; Cliff / Edge Failsafe</h2>
+            <p class=\"muted\">Line-tracker IR sensors detect missing floor and block forward motion. Backward/strafe/rotation always allowed.</p>
+            <div class=\"row\">
+                <button class=\"danger\" id=\"cliffToggleBtn\">Disable Failsafe</button>
+                <div class=\"kv\">Status: <span id=\"cliffStatus\">unknown</span></div>
+                <div class=\"kv\">Sensors: <span id=\"cliffSensors\">&mdash;</span></div>
+            </div>
+            <div class=\"row\" style=\"margin-top: 4px;\">
+                <div class=\"kv\" style=\"font-size:12px;\">&#9632;=floor &nbsp; &#9633;=edge/no floor &nbsp;|&nbsp; Sensors: L1 L2 (left) R1 R2 (right)</div>
+            </div>
+        </div>
+
         <div class=\"card\">
             <h2>Detection / Tracking</h2>
             <p class=\"muted\">Shows bounding boxes from <code>detections/json</code> and can enable person tracking via <code>tracking/enable</code>.</p>
@@ -280,6 +293,39 @@ INDEX_HTML = """<!doctype html>
                     </div>
                     <div class=\"kv\">Rotation: <span id=\"imuRotateStatus\">idle</span></div>
                 </div>
+            </div>
+        </div>
+
+        <div class=\"card\" id=\"bnoCalCard\" style=\"display:none;\">
+            <h2>&#129517; BNO055 Calibration</h2>
+            <p class=\"muted\">Auto-calibrate the 9-DOF BNO055 sensor. The robot will spin slowly, tilt gently, then hold still. Place on a flat surface before starting.</p>
+            <div style=\"display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;\">
+                <button class=\"primary\" id=\"bnoCalStart\">&#9654; Auto-Calibrate</button>
+                <button class=\"danger\" id=\"bnoCalStop\">&#9724; Cancel</button>
+                <span id=\"bnoCalStateLabel\" style=\"font-size:13px;color:#666;\">idle</span>
+            </div>
+            <div id=\"bnoCalStatus\" style=\"background:#f0f4ff;border:1px solid #c0d0f0;border-radius:6px;padding:10px 12px;margin-bottom:10px;font-size:13px;display:none;\"></div>
+            <div style=\"display:grid;grid-template-columns:80px 1fr 30px;gap:4px 8px;align-items:center;font-size:13px;font-family:ui-monospace,monospace;\">
+                <span>System</span>
+                <div style=\"background:#eee;border-radius:4px;height:18px;overflow:hidden;position:relative;\">
+                    <div id=\"bnoBarSys\" style=\"background:#e74c3c;height:100%;width:0%;transition:width 0.3s;border-radius:4px;\"></div>
+                </div>
+                <span id=\"bnoValSys\">0/3</span>
+                <span>Gyro</span>
+                <div style=\"background:#eee;border-radius:4px;height:18px;overflow:hidden;position:relative;\">
+                    <div id=\"bnoBarGyro\" style=\"background:#3498db;height:100%;width:0%;transition:width 0.3s;border-radius:4px;\"></div>
+                </div>
+                <span id=\"bnoValGyro\">0/3</span>
+                <span>Accel</span>
+                <div style=\"background:#eee;border-radius:4px;height:18px;overflow:hidden;position:relative;\">
+                    <div id=\"bnoBarAccel\" style=\"background:#f39c12;height:100%;width:0%;transition:width 0.3s;border-radius:4px;\"></div>
+                </div>
+                <span id=\"bnoValAccel\">0/3</span>
+                <span>Mag</span>
+                <div style=\"background:#eee;border-radius:4px;height:18px;overflow:hidden;position:relative;\">
+                    <div id=\"bnoBarMag\" style=\"background:#2ecc71;height:100%;width:0%;transition:width 0.3s;border-radius:4px;\"></div>
+                </div>
+                <span id=\"bnoValMag\">0/3</span>
             </div>
         </div>
 
@@ -882,6 +928,8 @@ INDEX_HTML = """<!doctype html>
                 updateCube(d);
                 // Update compass
                 drawCompass(yaw, d.rotate_target_deg);
+                // Update BNO055 calibration card
+                updateBnoCal(d);
                 // Update rotate status
                 if (d.rotate_active) {
                     imuRotating = true;
@@ -1058,6 +1106,99 @@ INDEX_HTML = """<!doctype html>
             } catch (e) { /* ignore */ }
         });
 
+        // ── BNO055 Calibration Card ────────────────────────────────
+        const bnoCalCard = document.getElementById('bnoCalCard');
+        const bnoCalStart = document.getElementById('bnoCalStart');
+        const bnoCalStop = document.getElementById('bnoCalStop');
+        const bnoCalStateLabel = document.getElementById('bnoCalStateLabel');
+        const bnoCalStatus = document.getElementById('bnoCalStatus');
+        const bnoBarSys = document.getElementById('bnoBarSys');
+        const bnoBarGyro = document.getElementById('bnoBarGyro');
+        const bnoBarAccel = document.getElementById('bnoBarAccel');
+        const bnoBarMag = document.getElementById('bnoBarMag');
+        const bnoValSys = document.getElementById('bnoValSys');
+        const bnoValGyro = document.getElementById('bnoValGyro');
+        const bnoValAccel = document.getElementById('bnoValAccel');
+        const bnoValMag = document.getElementById('bnoValMag');
+
+        function updateBnoCal(d) {
+            if (!d) return;
+            // Show/hide card based on BNO055 availability
+            if (d.bno_available) {
+                bnoCalCard.style.display = '';
+            } else {
+                bnoCalCard.style.display = 'none';
+                return;
+            }
+            const cal = d.bno_cal || {};
+            const ac = d.autocal || {};
+
+            // Update bars
+            const colors3 = ['#e74c3c', '#f39c12', '#2ecc71'];
+            function setBar(bar, valEl, v, name) {
+                const pct = Math.min(100, (v / 3) * 100);
+                bar.style.width = pct + '%';
+                bar.style.background = v >= 3 ? '#2ecc71' : v >= 2 ? '#f39c12' : v >= 1 ? '#3498db' : '#e74c3c';
+                valEl.textContent = v + '/3';
+            }
+            setBar(bnoBarSys, bnoValSys, cal.sys || 0, 'sys');
+            setBar(bnoBarGyro, bnoValGyro, cal.gyro || 0, 'gyro');
+            setBar(bnoBarAccel, bnoValAccel, cal.accel || 0, 'accel');
+            setBar(bnoBarMag, bnoValMag, cal.mag || 0, 'mag');
+
+            // State label
+            const stateMap = {
+                'idle': '⚪ Idle',
+                'spin_mag': '🔄 Spinning (magnetometer)',
+                'tilt_accel': '↕️ Tilting (accelerometer)',
+                'still_gyro': '⏸️ Holding still (gyroscope)',
+                'wait_sys': '⏳ Waiting for fusion',
+                'saving': '💾 Saving…',
+                'done': '✅ Done',
+                'failed': '❌ Failed',
+            };
+            bnoCalStateLabel.textContent = stateMap[ac.state] || ac.state || 'idle';
+            const stateColor = {
+                'idle': '#666', 'spin_mag': '#05a', 'tilt_accel': '#05a',
+                'still_gyro': '#05a', 'wait_sys': '#a80', 'saving': '#a80',
+                'done': '#080', 'failed': '#b00',
+            };
+            bnoCalStateLabel.style.color = stateColor[ac.state] || '#666';
+
+            // Status message
+            if (ac.message) {
+                bnoCalStatus.style.display = 'block';
+                bnoCalStatus.textContent = ac.message;
+            } else {
+                bnoCalStatus.style.display = 'none';
+            }
+
+            // Button states
+            const running = ac.state && ac.state !== 'idle' && ac.state !== 'done' && ac.state !== 'failed';
+            bnoCalStart.disabled = running;
+            bnoCalStop.disabled = !running;
+        }
+
+        bnoCalStart.addEventListener('click', async () => {
+            try {
+                const r = await fetch('/api/bno/autocal/start', {method: 'POST'});
+                const data = await r.json();
+                if (!data.ok) {
+                    bnoCalStatus.style.display = 'block';
+                    bnoCalStatus.textContent = '⚠️ ' + (data.error || 'Failed to start');
+                }
+            } catch (e) {
+                bnoCalStatus.style.display = 'block';
+                bnoCalStatus.textContent = '⚠️ Request failed';
+            }
+        });
+
+        bnoCalStop.addEventListener('click', async () => {
+            try {
+                await fetch('/api/bno/autocal/stop', {method: 'POST'});
+            } catch (e) { /* ignore */ }
+        });
+
         // Poll IMU at ~10 Hz
         fetchImu();
         setInterval(fetchImu, 100);
@@ -1083,7 +1224,7 @@ INDEX_HTML = """<!doctype html>
 
         // Update ultrasonic overlay from collision failsafe status
         function updateUltrasonicOverlay(cf) {
-            if (!cf) return;
+            if (!cf || !ultrasonicOverlay) return;
             const dist = cf.distance_m;
             const active = cf.active;
             const enabled = cf.enabled;
@@ -1253,6 +1394,34 @@ INDEX_HTML = """<!doctype html>
             }
         });
 
+        // ──────────────────────────────────────────────────────────────
+        // Cliff Failsafe
+        // ──────────────────────────────────────────────────────────────
+        const cliffToggleBtn = document.getElementById('cliffToggleBtn');
+        const cliffStatus = document.getElementById('cliffStatus');
+        const cliffSensors = document.getElementById('cliffSensors');
+        let cliffEnabled = true;
+
+        cliffToggleBtn.addEventListener('click', async () => {
+            if (cliffEnabled) {
+                try { await fetch('/api/cliff_failsafe/disable', { method: 'POST' }); } catch(e) {}
+                cliffEnabled = false;
+                cliffToggleBtn.textContent = 'Enable Failsafe';
+                cliffToggleBtn.classList.remove('danger');
+                cliffToggleBtn.classList.add('primary');
+                cliffStatus.textContent = 'disabled';
+                cliffStatus.style.color = '#666';
+            } else {
+                try { await fetch('/api/cliff_failsafe/enable', { method: 'POST' }); } catch(e) {}
+                cliffEnabled = true;
+                cliffToggleBtn.textContent = 'Disable Failsafe';
+                cliffToggleBtn.classList.remove('primary');
+                cliffToggleBtn.classList.add('danger');
+                cliffStatus.textContent = 'enabled';
+                cliffStatus.style.color = '#080';
+            }
+        });
+
         // Poll collision status from /status endpoint
         setInterval(async () => {
             try {
@@ -1294,6 +1463,47 @@ INDEX_HTML = """<!doctype html>
                     }
                     // Update front-camera ultrasonic overlay
                     updateUltrasonicOverlay(cf);
+                }
+
+                // ── Cliff failsafe status ──────────────────────────
+                if (d.cliff_failsafe) {
+                    const cl = d.cliff_failsafe;
+                    const state = cl.sensor_state || 0;
+                    // Render sensor boxes: filled = floor present, empty = no floor/edge
+                    const labels = ['L1','L2','R1','R2'];
+                    let sensorStr = '';
+                    for (let i = 0; i < 4; i++) {
+                        const hasFloor = (state >> i) & 1;
+                        sensorStr += (hasFloor ? '\u25A0' : '\u25A1') + labels[i] + ' ';
+                    }
+                    cliffSensors.textContent = sensorStr.trim();
+
+                    if (cl.active) {
+                        cliffStatus.textContent = 'BLOCKING';
+                        cliffStatus.style.color = '#b00';
+                        cliffSensors.style.color = '#b00';
+                    } else if (cl.enabled) {
+                        cliffStatus.textContent = 'clear';
+                        cliffStatus.style.color = '#080';
+                        cliffSensors.style.color = '';
+                    } else {
+                        cliffStatus.textContent = 'disabled';
+                        cliffStatus.style.color = '#666';
+                        cliffSensors.style.color = '#666';
+                    }
+                    // Sync toggle button
+                    if (cl.enabled !== cliffEnabled) {
+                        cliffEnabled = cl.enabled;
+                        if (cliffEnabled) {
+                            cliffToggleBtn.textContent = 'Disable Failsafe';
+                            cliffToggleBtn.classList.remove('primary');
+                            cliffToggleBtn.classList.add('danger');
+                        } else {
+                            cliffToggleBtn.textContent = 'Enable Failsafe';
+                            cliffToggleBtn.classList.remove('danger');
+                            cliffToggleBtn.classList.add('primary');
+                        }
+                    }
                 }
             } catch(e) {}
         }, 500);
@@ -1607,6 +1817,35 @@ class WebVideoNode(Node):
 
         self.get_logger().info(f"IMU topics: data={imu_data_topic}, yaw={imu_yaw_topic}, cal={imu_cal_topic}")
 
+        # ── BNO055 calibration integration ─────────────────────────────
+        self.declare_parameter("imu_calibration_topic", "imu/calibration")
+        self.declare_parameter("imu_save_cal_topic", "imu/save_cal")
+        imu_calibration_topic = str(self.get_parameter("imu_calibration_topic").value)
+        imu_save_cal_topic = str(self.get_parameter("imu_save_cal_topic").value)
+
+        self._bno_cal = {'sys': 0, 'gyro': 0, 'accel': 0, 'mag': 0}
+        self._bno_cal_available = False
+
+        self._bno_cal_sub = self.create_subscription(
+            String, imu_calibration_topic, self._on_bno_cal, 10
+        )
+        self._imu_save_cal_pub = self.create_publisher(Empty, imu_save_cal_topic, 10)
+
+        # Auto-calibration state machine
+        # States: 'idle', 'spin_mag', 'tilt_accel', 'still_gyro', 'wait_sys', 'saving', 'done', 'failed'
+        self._autocal_state = 'idle'
+        self._autocal_phase_start = 0.0
+        self._autocal_status_msg = ''
+        self._autocal_spin_dir = 1.0
+        self._autocal_tilt_phase = 0  # sub-phase for tilt sequence
+        self._autocal_tilt_start = 0.0
+        self._autocal_timer = self.create_timer(0.1, self._autocal_tick)  # 10 Hz
+
+        self.get_logger().info(
+            f"BNO055 calibration topics: detail={imu_calibration_topic}, "
+            f"save={imu_save_cal_topic}"
+        )
+
         # ── Audio streaming ─────────────────────────────────────────
         self.declare_parameter("imu_audio_topic", "imu/audio")
         self.declare_parameter("imu_audio_enable_topic", "imu/audio_enable")
@@ -1668,6 +1907,31 @@ class WebVideoNode(Node):
         self.get_logger().info(
             f"Collision failsafe topics: enable={cf_enable_topic}, "
             f"active={cf_active_topic}, range={us_range_topic}"
+        )
+
+        # ── Cliff failsafe integration ────────────────────────────────
+        self.declare_parameter("cliff_failsafe_enable_topic", "cliff_failsafe/enable")
+        self.declare_parameter("cliff_failsafe_active_topic", "cliff_failsafe/active")
+        self.declare_parameter("cliff_tracking_state_topic", "tracking/state")
+
+        cl_enable_topic = str(self.get_parameter("cliff_failsafe_enable_topic").value)
+        cl_active_topic = str(self.get_parameter("cliff_failsafe_active_topic").value)
+        cl_tracking_topic = str(self.get_parameter("cliff_tracking_state_topic").value)
+
+        self._cliff_failsafe_enabled = True   # mirrors motor_driver default
+        self._cliff_failsafe_active = False
+        self._cliff_sensor_state = 0
+
+        self._cl_enable_pub = self.create_publisher(Bool, cl_enable_topic, 10)
+        self._cl_active_sub = self.create_subscription(
+            Bool, cl_active_topic, self._on_cliff_active, 10
+        )
+        self._cl_tracking_sub = self.create_subscription(
+            Int32, cl_tracking_topic, self._on_cliff_tracking, 10
+        )
+        self.get_logger().info(
+            f"Cliff failsafe topics: enable={cl_enable_topic}, "
+            f"active={cl_active_topic}, tracking={cl_tracking_topic}"
         )
 
     @staticmethod
@@ -1828,6 +2092,11 @@ class WebVideoNode(Node):
                     else None
                 ),
             },
+            'cliff_failsafe': {
+                'enabled': bool(self._cliff_failsafe_enabled),
+                'active': bool(self._cliff_failsafe_active),
+                'sensor_state': int(self._cliff_sensor_state),
+            },
         }
 
     def _on_detections(self, msg: String) -> None:
@@ -1958,6 +2227,210 @@ class WebVideoNode(Node):
     def _on_imu_mic(self, msg: Int32) -> None:
         self._imu_mic_level = msg.data
 
+    def _on_bno_cal(self, msg: String) -> None:
+        """Receive BNO055 calibration JSON from imu/calibration."""
+        try:
+            data = json.loads(msg.data)
+            self._bno_cal = {
+                'sys': int(data.get('sys', 0)),
+                'gyro': int(data.get('gyro', 0)),
+                'accel': int(data.get('accel', 0)),
+                'mag': int(data.get('mag', 0)),
+            }
+            self._bno_cal_available = True
+        except Exception:
+            pass
+
+    # ── BNO055 auto-calibration state machine ─────────────────────
+
+    _AUTOCAL_SPIN_SPEED = 0.35      # rad/s — slow rotation
+    _AUTOCAL_SPIN_TIME = 20.0       # seconds — full slow spin for mag
+    _AUTOCAL_TILT_SPEED = 0.25      # m/s — gentle forward/back tilt
+    _AUTOCAL_TILT_TIME = 3.0        # seconds per tilt direction
+    _AUTOCAL_STILL_TIME = 4.0       # seconds — hold still for gyro
+    _AUTOCAL_WAIT_SYS_TIME = 10.0   # seconds — wait for sys to converge
+    _AUTOCAL_TIMEOUT = 90.0         # overall timeout
+
+    def start_autocal(self) -> dict:
+        """Begin the BNO055 auto-calibration routine."""
+        if not self._bno_cal_available:
+            return {'ok': False, 'error': 'BNO055 not available'}
+        if self._autocal_state not in ('idle', 'done', 'failed'):
+            return {'ok': False, 'error': f'Already running ({self._autocal_state})'}
+        self._autocal_state = 'spin_mag'
+        self._autocal_phase_start = time.monotonic()
+        self._autocal_status_msg = 'Starting magnetometer calibration…'
+        self._autocal_spin_dir = 1.0
+        self._autocal_tilt_phase = 0
+        self.get_logger().info('BNO055 auto-calibration started')
+        return {'ok': True, 'state': 'spin_mag'}
+
+    def stop_autocal(self) -> None:
+        """Cancel auto-calibration and stop motors."""
+        if self._autocal_state not in ('idle', 'done', 'failed'):
+            self.get_logger().info('BNO055 auto-calibration cancelled')
+        self._autocal_state = 'idle'
+        self._autocal_status_msg = ''
+        self.stop_cmd_vel()
+
+    def get_autocal_state(self) -> dict:
+        """Return current auto-cal status for the UI."""
+        return {
+            'state': self._autocal_state,
+            'message': self._autocal_status_msg,
+            'bno_cal': dict(self._bno_cal),
+            'bno_available': self._bno_cal_available,
+        }
+
+    def _autocal_tick(self) -> None:
+        """10 Hz state machine for BNO055 auto-calibration."""
+        state = self._autocal_state
+        if state == 'idle' or state == 'done' or state == 'failed':
+            return
+
+        now = time.monotonic()
+        elapsed = now - self._autocal_phase_start
+        cal = self._bno_cal
+
+        # Overall timeout
+        if state != 'saving' and elapsed > self._AUTOCAL_TIMEOUT:
+            self._autocal_state = 'failed'
+            self._autocal_status_msg = (
+                f'Timeout — cal: sys={cal["sys"]} gyro={cal["gyro"]} '
+                f'accel={cal["accel"]} mag={cal["mag"]}. '
+                'Try again or calibrate manually.'
+            )
+            self.stop_cmd_vel()
+            self.get_logger().warn(f'Auto-cal timeout: {self._autocal_status_msg}')
+            return
+
+        # ── Phase 1: Slow spin for magnetometer ──────────────────
+        if state == 'spin_mag':
+            if cal['mag'] >= 3:
+                self.get_logger().info(f'Mag calibrated (mag={cal["mag"]}) — moving to accel phase')
+                self.stop_cmd_vel()
+                self._autocal_state = 'tilt_accel'
+                self._autocal_phase_start = now
+                self._autocal_tilt_phase = 0
+                self._autocal_tilt_start = now
+                return
+            # Alternate spin direction every 8 seconds
+            spin_cycle = int(elapsed / 8.0)
+            self._autocal_spin_dir = 1.0 if (spin_cycle % 2 == 0) else -1.0
+            msg = Twist()
+            msg.angular.z = self._autocal_spin_dir * self._AUTOCAL_SPIN_SPEED
+            self._cmd_pub.publish(msg)
+            self._cmd_last_rx_monotonic = now
+            self._cmd_last_sent_monotonic = now
+            progress = min(100, int(elapsed / self._AUTOCAL_SPIN_TIME * 100))
+            self._autocal_status_msg = (
+                f'Spinning for magnetometer… mag={cal["mag"]}/3 ({progress}%)'
+            )
+            # Time-based fallback: move on even if mag hasn't reached 3
+            if elapsed >= self._AUTOCAL_SPIN_TIME:
+                self.get_logger().info(f'Spin phase done (mag={cal["mag"]}) — moving to accel')
+                self.stop_cmd_vel()
+                self._autocal_state = 'tilt_accel'
+                self._autocal_phase_start = now
+                self._autocal_tilt_phase = 0
+                self._autocal_tilt_start = now
+            return
+
+        # ── Phase 2: Gentle tilts for accelerometer ──────────────
+        if state == 'tilt_accel':
+            if cal['accel'] >= 3:
+                self.get_logger().info(f'Accel calibrated (accel={cal["accel"]}) — moving to gyro phase')
+                self.stop_cmd_vel()
+                self._autocal_state = 'still_gyro'
+                self._autocal_phase_start = now
+                return
+            tilt_elapsed = now - self._autocal_tilt_start
+            # Sub-phases: forward, back, left, right, stop (each TILT_TIME seconds)
+            directions = [
+                ('Forward tilt…', 0.15, 0.0, 0.0),
+                ('Backward tilt…', -0.15, 0.0, 0.0),
+                ('Left strafe…', 0.0, 0.15, 0.0),
+                ('Right strafe…', 0.0, -0.15, 0.0),
+                ('Pause…', 0.0, 0.0, 0.0),
+            ]
+            if self._autocal_tilt_phase >= len(directions):
+                # All tilt sub-phases done
+                self.get_logger().info(f'Tilt phase done (accel={cal["accel"]}) — moving to gyro')
+                self.stop_cmd_vel()
+                self._autocal_state = 'still_gyro'
+                self._autocal_phase_start = now
+                return
+            label, lx, ly, az = directions[self._autocal_tilt_phase]
+            msg = Twist()
+            msg.linear.x = float(lx)
+            msg.linear.y = float(ly)
+            msg.angular.z = float(az)
+            self._cmd_pub.publish(msg)
+            self._cmd_last_rx_monotonic = now
+            self._cmd_last_sent_monotonic = now
+            self._autocal_status_msg = (
+                f'{label} accel={cal["accel"]}/3 '
+                f'(step {self._autocal_tilt_phase + 1}/{len(directions)})'
+            )
+            if tilt_elapsed >= self._AUTOCAL_TILT_TIME:
+                self._autocal_tilt_phase += 1
+                self._autocal_tilt_start = now
+            return
+
+        # ── Phase 3: Hold still for gyroscope ────────────────────
+        if state == 'still_gyro':
+            if cal['gyro'] >= 3:
+                self.get_logger().info(f'Gyro calibrated (gyro={cal["gyro"]}) — waiting for sys')
+                self._autocal_state = 'wait_sys'
+                self._autocal_phase_start = now
+                return
+            # Just keep still
+            self._autocal_status_msg = (
+                f'Holding still for gyroscope… gyro={cal["gyro"]}/3'
+            )
+            if elapsed >= self._AUTOCAL_STILL_TIME:
+                self.get_logger().info(f'Still phase done (gyro={cal["gyro"]}) — waiting for sys')
+                self._autocal_state = 'wait_sys'
+                self._autocal_phase_start = now
+            return
+
+        # ── Phase 4: Wait for system calibration to converge ─────
+        if state == 'wait_sys':
+            all_ok = (cal['sys'] >= 1 and cal['gyro'] >= 2
+                      and cal['accel'] >= 1 and cal['mag'] >= 1)
+            fully_cal = (cal['sys'] >= 3 and cal['gyro'] >= 3
+                         and cal['accel'] >= 3 and cal['mag'] >= 3)
+            self._autocal_status_msg = (
+                f'Waiting for fusion… sys={cal["sys"]}/3 '
+                f'gyro={cal["gyro"]}/3 accel={cal["accel"]}/3 '
+                f'mag={cal["mag"]}/3'
+            )
+            if all_ok or fully_cal or elapsed >= self._AUTOCAL_WAIT_SYS_TIME:
+                self.get_logger().info(
+                    f'Auto-cal complete — sys={cal["sys"]} gyro={cal["gyro"]} '
+                    f'accel={cal["accel"]} mag={cal["mag"]} — saving…'
+                )
+                self._autocal_state = 'saving'
+                self._autocal_phase_start = now
+                # Send save command
+                save_msg = Empty()
+                self._imu_save_cal_pub.publish(save_msg)
+            return
+
+        # ── Phase 5: Save and finish ─────────────────────────────
+        if state == 'saving':
+            if elapsed >= 1.0:
+                self._autocal_state = 'done'
+                self._autocal_status_msg = (
+                    f'✅ Calibration saved! sys={cal["sys"]} '
+                    f'gyro={cal["gyro"]} accel={cal["accel"]} '
+                    f'mag={cal["mag"]}'
+                )
+                self.get_logger().info(f'Auto-cal done: {self._autocal_status_msg}')
+            else:
+                self._autocal_status_msg = 'Saving calibration to flash…'
+            return
+
     def get_imu_dict(self) -> dict:
         now = time.monotonic()
         age = None
@@ -1977,6 +2450,9 @@ class WebVideoNode(Node):
             'last_age_s': round(age, 3) if age is not None else None,
             'rotate_active': bool(self._rotate_active),
             'rotate_target_deg': self._rotate_target_deg,
+            'bno_cal': dict(self._bno_cal),
+            'bno_available': self._bno_cal_available,
+            'autocal': self.get_autocal_state(),
         }
 
     def imu_calibrate(self) -> None:
@@ -2056,6 +2532,29 @@ class WebVideoNode(Node):
         self._collision_failsafe_enabled = False
         self._collision_failsafe_active = False
         self.get_logger().info("Collision failsafe disabled via web UI")
+
+    # ── Cliff failsafe control ────────────────────────────────────
+
+    def _on_cliff_active(self, msg: Bool) -> None:
+        self._cliff_failsafe_active = msg.data
+
+    def _on_cliff_tracking(self, msg: Int32) -> None:
+        self._cliff_sensor_state = msg.data
+
+    def cliff_failsafe_enable(self) -> None:
+        msg = Bool()
+        msg.data = True
+        self._cl_enable_pub.publish(msg)
+        self._cliff_failsafe_enabled = True
+        self.get_logger().info("Cliff failsafe enabled via web UI")
+
+    def cliff_failsafe_disable(self) -> None:
+        msg = Bool()
+        msg.data = False
+        self._cl_enable_pub.publish(msg)
+        self._cliff_failsafe_enabled = False
+        self._cliff_failsafe_active = False
+        self.get_logger().info("Cliff failsafe disabled via web UI")
 
     # ── Rotate-to-angle controller ────────────────────────────────────
 
@@ -2159,6 +2658,8 @@ def make_handler(
     lightbar_setter=None,
     imu_provider=None,
     imu_calibrate=None,
+    autocal_starter=None,
+    autocal_stopper=None,
     rotate_starter=None,
     rotate_stopper=None,
     audio_buffer=None,
@@ -2168,6 +2669,8 @@ def make_handler(
     depth_disabler=None,
     collision_failsafe_enabler=None,
     collision_failsafe_disabler=None,
+    cliff_failsafe_enabler=None,
+    cliff_failsafe_disabler=None,
 ):
     boundary = b"--frame"
     fps = max(float(fps_limit), 1.0)
@@ -3019,6 +3522,31 @@ def make_handler(
                 self.end_headers()
                 return
 
+            if path == '/api/bno/autocal/start':
+                result = {'ok': False, 'error': 'not available'}
+                if callable(autocal_starter):
+                    try:
+                        result = autocal_starter()
+                    except Exception as e:
+                        result = {'ok': False, 'error': str(e)}
+                body = (json.dumps(result) + '\n').encode('utf-8')
+                self.send_response(HTTPStatus.OK)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            if path == '/api/bno/autocal/stop':
+                if callable(autocal_stopper):
+                    try:
+                        autocal_stopper()
+                    except Exception:
+                        pass
+                self.send_response(HTTPStatus.NO_CONTENT)
+                self.end_headers()
+                return
+
             if path == '/api/audio/enable':
                 if callable(audio_enabler):
                     try:
@@ -3079,6 +3607,26 @@ def make_handler(
                 self.end_headers()
                 return
 
+            if path == '/api/cliff_failsafe/enable':
+                if callable(cliff_failsafe_enabler):
+                    try:
+                        cliff_failsafe_enabler()
+                    except Exception:
+                        pass
+                self.send_response(HTTPStatus.NO_CONTENT)
+                self.end_headers()
+                return
+
+            if path == '/api/cliff_failsafe/disable':
+                if callable(cliff_failsafe_disabler):
+                    try:
+                        cliff_failsafe_disabler()
+                    except Exception:
+                        pass
+                self.send_response(HTTPStatus.NO_CONTENT)
+                self.end_headers()
+                return
+
             self.send_response(HTTPStatus.NOT_FOUND)
             self.send_header('Content-Type', 'text/plain; charset=utf-8')
             self.end_headers()
@@ -3126,6 +3674,8 @@ def main() -> None:
         lightbar_setter=node.set_lightbar_command,
         imu_provider=node.get_imu_dict,
         imu_calibrate=node.imu_calibrate,
+        autocal_starter=node.start_autocal,
+        autocal_stopper=node.stop_autocal,
         rotate_starter=node.start_rotate,
         rotate_stopper=node.stop_rotate,
         audio_buffer=audio_buffer,
@@ -3135,6 +3685,8 @@ def main() -> None:
         depth_disabler=node.depth_disable,
         collision_failsafe_enabler=node.collision_failsafe_enable,
         collision_failsafe_disabler=node.collision_failsafe_disable,
+        cliff_failsafe_enabler=node.cliff_failsafe_enable,
+        cliff_failsafe_disabler=node.cliff_failsafe_disable,
     )
     httpd = ThreadingHTTPServer((bind, port), handler_cls)
     # Allow the serve loop to wake up periodically so Ctrl-C / rclpy shutdown is responsive.

@@ -90,6 +90,16 @@ motor_driver:
     collision_ultrasonic_topic: "ultrasonic/range"
     collision_failsafe_timeout_sec: 1.0  # ignore stale data after this long
 
+    # ── Cliff failsafe (line-tracker IR sensors) ─────────────────────
+    # Blocks forward motion when any line-tracker sensor detects "no floor"
+    # (i.e. an edge, cliff, or stair drop).  Enabled by default.
+    # Sensor polarity: 1 = floor present, 0 = no floor / edge.
+    # Does NOT affect backward, strafe, or rotation.
+    cliff_failsafe_enable: true
+    cliff_tracking_topic: "tracking/state"
+    cliff_failsafe_timeout_sec: 1.0    # ignore stale data after this long
+    cliff_sensor_mask: 15              # bitmask: L1=1 L2=2 R1=4 R2=8 (15 = all)
+
 ultrasonic:
   ros__parameters:
     # auto will use I2C distance registers on Pi5 (0x2B) and GPIO trig/echo on legacy.
@@ -192,7 +202,7 @@ camera_gimbal:
     imu_topic: "imu/data"
     imu_tilt_gain: 1.0          # 1.0 = fully compensate measured pitch
     imu_tilt_alpha: 0.85        # low-pass filter (0..1, higher = more smooth)
-    imu_tilt_sign: -1.0         # flip if compensation goes the wrong way
+    imu_tilt_sign: 1.0          # flip if compensation goes the wrong way
 
 lightbar:
   ros__parameters:
@@ -232,6 +242,31 @@ imu_serial:
     # Noise / covariance (diagonal)
     accel_variance: 0.01
     gyro_variance: 0.001
+    # BNO055 9-DOF (connected to Arduino A4/A5, firmware v2.0.0+)
+    # When detected, imu/data carries fused quaternion and imu/yaw_deg
+    # uses magnetometer-stabilised heading instead of drifting gyro yaw.
+    orientation_variance: 0.0001    # BNO055 fused orientation is very accurate
+    bno_cal_threshold: 1            # min system calibration (0-3) for calibrated=true
+    heading_offset_deg: 0.0         # compass offset to align BNO055 north with robot forward
+
+bno055_serial:
+  ros__parameters:
+    # USB serial port for the Pico RP2040 + BNO055 bridge.
+    # Typically /dev/ttyACM1 if the Arduino Nano is on /dev/ttyACM0.
+    # Use /dev/serial/by-id/... for a stable name:
+    #   ls /dev/serial/by-id/  → look for "Raspberry_Pi_Pico"
+    serial_port: "/dev/ttyACM1"
+    baud_rate: 115200
+    serial_timeout_sec: 2.0
+    frame_id: "imu_link"
+    # Minimum system calibration (0-3) to publish imu/calibrated=true
+    cal_threshold: 1
+    # Compass heading offset (degrees) to align BNO055 north with robot forward
+    heading_offset_deg: 0.0
+    # Covariance (diagonal). BNO055 fused orientation is very accurate.
+    orientation_variance: 0.0001
+    accel_variance: 0.01
+    gyro_variance: 0.0001
 
 oled:
   ros__parameters:
