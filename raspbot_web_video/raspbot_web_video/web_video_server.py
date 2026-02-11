@@ -7,6 +7,8 @@ import json
 from urllib.parse import parse_qs, urlparse
 from typing import Optional
 
+import numpy as np
+
 import rclpy
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
@@ -117,7 +119,7 @@ INDEX_HTML = """<!doctype html>
 
         <div class=\"card\">
             <h2>Auto Follow</h2>
-            <p class=\"muted\">Makes the robot base move to follow the detected subject at a set distance. Works alongside gimbal tracking.</p>
+            <p class=\"muted\">Makes the robot base move to follow the detected subject at a set distance. Uses mecanum strafing and IMU feedback for smooth, direct tracking.</p>
             <div class=\"row\">
                 <button class=\"primary\" id=\"followBtn\">Enable auto follow</button>
                 <div class=\"kv\">Follow: <span id=\"followState\">off</span></div>
@@ -132,8 +134,18 @@ INDEX_HTML = """<!doctype html>
                     <input id=\"followSpeed\" type=\"range\" min=\"0.05\" max=\"0.50\" step=\"0.05\" value=\"0.30\" />
                 </div>
             </div>
+            <div class=\"row\" style=\"margin-top: 8px;\">
+                <div>
+                    <label for=\"followStrafe\">Strafe gain: <span id=\"followStrafeVal\">0.50</span></label>
+                    <input id=\"followStrafe\" type=\"range\" min=\"0.0\" max=\"1.0\" step=\"0.05\" value=\"0.50\" />
+                </div>
+                <div>
+                    <label for=\"followGyroDamp\">Gyro damping: <span id=\"followGyroDampVal\">0.15</span></label>
+                    <input id=\"followGyroDamp\" type=\"range\" min=\"0.0\" max=\"0.50\" step=\"0.01\" value=\"0.15\" />
+                </div>
+            </div>
             <div class=\"row\" style=\"margin-top: 4px;\">
-                <div class=\"kv\">Tip: stand at the desired distance and read the detection bbox area, then set the slider to match.</div>
+                <div class=\"kv\">Strafe moves the robot sideways toward the person (mecanum). Gyro damping uses the IMU to reduce angular oscillation.</div>
             </div>
         </div>
 
@@ -317,6 +329,10 @@ INDEX_HTML = """<!doctype html>
         const followDistVal = document.getElementById('followDistVal');
         const followSpeed = document.getElementById('followSpeed');
         const followSpeedVal = document.getElementById('followSpeedVal');
+        const followStrafe = document.getElementById('followStrafe');
+        const followStrafeVal = document.getElementById('followStrafeVal');
+        const followGyroDamp = document.getElementById('followGyroDamp');
+        const followGyroDampVal = document.getElementById('followGyroDampVal');
 
         let debounceTimer = null;
 
@@ -374,6 +390,14 @@ INDEX_HTML = """<!doctype html>
                     if (typeof j.follow.max_linear === 'number' && !userRecentlyTouched(followSpeed)) {
                         followSpeed.value = j.follow.max_linear.toFixed(2);
                         followSpeedVal.textContent = j.follow.max_linear.toFixed(2);
+                    }
+                    if (typeof j.follow.strafe_gain === 'number' && !userRecentlyTouched(followStrafe)) {
+                        followStrafe.value = j.follow.strafe_gain.toFixed(2);
+                        followStrafeVal.textContent = j.follow.strafe_gain.toFixed(2);
+                    }
+                    if (typeof j.follow.gyro_damping === 'number' && !userRecentlyTouched(followGyroDamp)) {
+                        followGyroDamp.value = j.follow.gyro_damping.toFixed(2);
+                        followGyroDampVal.textContent = j.follow.gyro_damping.toFixed(2);
                     }
                 }
             } catch (e) {
@@ -438,12 +462,15 @@ INDEX_HTML = """<!doctype html>
             await setFollow(!enabled);
         });
 
-        async function sendFollowConfig(targetArea, maxLinear) {
+        async function sendFollowConfig(targetArea, maxLinear, strafeGain, gyroDamping) {
+            const body = {target_bbox_area: Number(targetArea), max_linear: Number(maxLinear)};
+            if (strafeGain !== undefined) body.strafe_gain = Number(strafeGain);
+            if (gyroDamping !== undefined) body.gyro_damping = Number(gyroDamping);
             try {
                 await fetch('/api/follow/config', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({target_bbox_area: Number(targetArea), max_linear: Number(maxLinear)})
+                    body: JSON.stringify(body)
                 });
             } catch (e) { /* ignore */ }
         }
@@ -451,12 +478,22 @@ INDEX_HTML = """<!doctype html>
         followDist.addEventListener('input', () => {
             markUserInput(followDist);
             followDistVal.textContent = Number(followDist.value).toFixed(2);
-            sendFollowConfig(followDist.value, followSpeed.value);
+            sendFollowConfig(followDist.value, followSpeed.value, followStrafe.value, followGyroDamp.value);
         });
         followSpeed.addEventListener('input', () => {
             markUserInput(followSpeed);
             followSpeedVal.textContent = Number(followSpeed.value).toFixed(2);
-            sendFollowConfig(followDist.value, followSpeed.value);
+            sendFollowConfig(followDist.value, followSpeed.value, followStrafe.value, followGyroDamp.value);
+        });
+        followStrafe.addEventListener('input', () => {
+            markUserInput(followStrafe);
+            followStrafeVal.textContent = Number(followStrafe.value).toFixed(2);
+            sendFollowConfig(followDist.value, followSpeed.value, followStrafe.value, followGyroDamp.value);
+        });
+        followGyroDamp.addEventListener('input', () => {
+            markUserInput(followGyroDamp);
+            followGyroDampVal.textContent = Number(followGyroDamp.value).toFixed(2);
+            sendFollowConfig(followDist.value, followSpeed.value, followStrafe.value, followGyroDamp.value);
         });
 
         invPanChk.addEventListener('change', async () => {
@@ -1506,6 +1543,16 @@ class WebVideoNode(Node):
         self._follow_max_linear = 0.30
         self._follow_max_linear_pub = self.create_publisher(Float64, follow_max_linear_topic, 10)
 
+        # Runtime-tunable strafe gain and gyro damping
+        self.declare_parameter("follow_strafe_gain_topic", "follow/strafe_gain")
+        self.declare_parameter("follow_gyro_damping_topic", "follow/gyro_damping")
+        follow_strafe_gain_topic = str(self.get_parameter("follow_strafe_gain_topic").value)
+        follow_gyro_damping_topic = str(self.get_parameter("follow_gyro_damping_topic").value)
+        self._follow_strafe_gain = 0.50
+        self._follow_gyro_damping = 0.15
+        self._follow_strafe_gain_pub = self.create_publisher(Float64, follow_strafe_gain_topic, 10)
+        self._follow_gyro_damping_pub = self.create_publisher(Float64, follow_gyro_damping_topic, 10)
+
         lightbar_command_topic = str(self.get_parameter("lightbar_command_topic").value)
         self._lightbar_pub = self.create_publisher(String, lightbar_command_topic, 10)
         self.get_logger().info(f"Lightbar command topic: {lightbar_command_topic} (std_msgs/String JSON)")
@@ -1768,6 +1815,8 @@ class WebVideoNode(Node):
                 'enabled': bool(self._follow_enabled),
                 'target_bbox_area': float(self._follow_target_bbox_area),
                 'max_linear': float(self._follow_max_linear),
+                'strafe_gain': float(self._follow_strafe_gain),
+                'gyro_damping': float(self._follow_gyro_damping),
             },
             'collision_failsafe': {
                 'enabled': bool(self._collision_failsafe_enabled),
@@ -1808,7 +1857,8 @@ class WebVideoNode(Node):
         self._follow_pub.publish(msg)
         self._follow_enabled = bool(enabled)
 
-    def set_follow_config(self, target_bbox_area: float = None, max_linear: float = None) -> None:
+    def set_follow_config(self, target_bbox_area: float = None, max_linear: float = None,
+                         strafe_gain: float = None, gyro_damping: float = None) -> None:
         if target_bbox_area is not None:
             val = max(0.01, min(1.0, float(target_bbox_area)))
             self._follow_target_bbox_area = val
@@ -1821,6 +1871,18 @@ class WebVideoNode(Node):
             msg = Float64()
             msg.data = val
             self._follow_max_linear_pub.publish(msg)
+        if strafe_gain is not None:
+            val = max(0.0, min(2.0, float(strafe_gain)))
+            self._follow_strafe_gain = val
+            msg = Float64()
+            msg.data = val
+            self._follow_strafe_gain_pub.publish(msg)
+        if gyro_damping is not None:
+            val = max(0.0, min(1.0, float(gyro_damping)))
+            self._follow_gyro_damping = val
+            msg = Float64()
+            msg.data = val
+            self._follow_gyro_damping_pub.publish(msg)
 
     def take_snapshot(self) -> dict:
         """Grab the latest full-resolution JPEG and save to disk. Returns {filename, path}."""
@@ -2110,6 +2172,33 @@ def make_handler(
     boundary = b"--frame"
     fps = max(float(fps_limit), 1.0)
     min_period = 1.0 / fps
+
+    # ── Low-resolution JPEG resize helper (for Cardputer / embedded clients) ─
+    _cv2 = None
+    try:
+        import cv2 as _cv2_mod  # type: ignore
+        _cv2 = _cv2_mod
+    except ImportError:
+        if logger is not None:
+            logger.warn("cv2 not available — /stream_*_lo.mjpg endpoints disabled")
+
+    def _resize_jpeg(jpeg_bytes: bytes, target_w: int = 320, target_h: int = 240,
+                     quality: int = 50) -> Optional[bytes]:
+        """Decode JPEG, resize, re-encode at lower quality.  Returns None on error."""
+        if _cv2 is None:
+            return None
+        try:
+            arr = np.frombuffer(jpeg_bytes, dtype=np.uint8)
+            img = _cv2.imdecode(arr, _cv2.IMREAD_COLOR)
+            if img is None:
+                return None
+            resized = _cv2.resize(img, (target_w, target_h), interpolation=_cv2.INTER_AREA)
+            ok, enc = _cv2.imencode('.jpg', resized, [_cv2.IMWRITE_JPEG_QUALITY, quality])
+            if not ok:
+                return None
+            return bytes(enc)
+        except Exception:
+            return None
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):
@@ -2408,6 +2497,89 @@ def make_handler(
                         logger.warn(f"depth stream client error: {e!r}")
                     return
 
+            # ── Low-resolution streams (320×240) for embedded clients ────
+            # /stream_lo.mjpg   → gimbal camera, resized
+            # /stream_front_lo.mjpg → front camera, resized
+            if path.startswith("/stream_lo.mjpg") or path.startswith("/stream_front_lo.mjpg"):
+                is_front = path.startswith("/stream_front_lo")
+                src_buffer = front_frame_buffer if is_front else frame_buffer
+                cam_label = "front" if is_front else "gimbal"
+
+                if _cv2 is None:
+                    self.send_response(HTTPStatus.SERVICE_UNAVAILABLE)
+                    self.send_header("Content-Type", "text/plain; charset=utf-8")
+                    self.end_headers()
+                    self.wfile.write(b"Low-res stream requires OpenCV (cv2)\n")
+                    return
+
+                if src_buffer is None:
+                    self.send_response(HTTPStatus.SERVICE_UNAVAILABLE)
+                    self.send_header("Content-Type", "text/plain; charset=utf-8")
+                    self.end_headers()
+                    self.wfile.write(f"{cam_label} camera not available\n".encode())
+                    return
+
+                # Parse optional query parameters: w, h, q
+                qs = parse_qs(parsed.query)
+                lo_w = int(qs.get("w", ["320"])[0])
+                lo_h = int(qs.get("h", ["240"])[0])
+                lo_q = int(qs.get("q", ["50"])[0])
+                lo_w = max(80, min(lo_w, 640))
+                lo_h = max(60, min(lo_h, 480))
+                lo_q = max(10, min(lo_q, 95))
+
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Age", "0")
+                self.send_header("Cache-Control", "no-cache, private")
+                self.send_header("Pragma", "no-cache")
+                self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+                self.end_headers()
+                try:
+                    self.wfile.flush()
+                except Exception:
+                    pass
+
+                last_stamp = 0.0
+                last_sent_time = 0.0
+
+                try:
+                    while True:
+                        now = time.monotonic()
+                        sleep_needed = (last_sent_time + min_period) - now
+                        if sleep_needed > 0:
+                            time.sleep(sleep_needed)
+
+                        frame = src_buffer.wait_for_newer(last_stamp, timeout=1.0)
+                        if frame.jpeg is None:
+                            continue
+
+                        last_stamp = frame.stamp_monotonic
+                        last_sent_time = time.monotonic()
+
+                        resized = _resize_jpeg(frame.jpeg, lo_w, lo_h, lo_q)
+                        if resized is None:
+                            # Fallback: send original frame
+                            resized = frame.jpeg
+
+                        headers = (
+                            boundary + b"\r\n"
+                            b"Content-Type: image/jpeg\r\n" +
+                            f"Content-Length: {len(resized)}\r\n\r\n".encode("ascii")
+                        )
+                        self.wfile.write(headers)
+                        self.wfile.write(resized)
+                        self.wfile.write(b"\r\n")
+                        try:
+                            self.wfile.flush()
+                        except Exception:
+                            pass
+                except (BrokenPipeError, ConnectionResetError):
+                    return
+                except Exception as e:
+                    if logger is not None:
+                        logger.warn(f"{cam_label} lo-res stream error: {e!r}")
+                    return
+
             if path.startswith("/stream_audio"):
                 if audio_buffer is None:
                     self.send_response(HTTPStatus.SERVICE_UNAVAILABLE)
@@ -2656,17 +2828,24 @@ def make_handler(
                     payload = json.loads(raw.decode('utf-8'))
                     target_area = payload.get('target_bbox_area')
                     max_linear = payload.get('max_linear')
+                    strafe_gain = payload.get('strafe_gain')
+                    gyro_damping = payload.get('gyro_damping')
                     if target_area is not None:
                         target_area = float(target_area)
                     if max_linear is not None:
                         max_linear = float(max_linear)
+                    if strafe_gain is not None:
+                        strafe_gain = float(strafe_gain)
+                    if gyro_damping is not None:
+                        gyro_damping = float(gyro_damping)
                 except Exception:
                     self.send_response(HTTPStatus.BAD_REQUEST)
                     self.end_headers()
                     return
 
                 try:
-                    follow_config_setter(target_area=target_area, max_linear=max_linear)
+                    follow_config_setter(target_bbox_area=target_area, max_linear=max_linear,
+                                         strafe_gain=strafe_gain, gyro_damping=gyro_damping)
                 except Exception:
                     self.send_response(HTTPStatus.INTERNAL_SERVER_ERROR)
                     self.end_headers()

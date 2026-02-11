@@ -218,10 +218,17 @@ class OledNode(Node):
         period = 1.0 / max(hz, 0.2)
         self._timer = self.create_timer(period, self._tick)
 
-        self._ip = _first_non_local_ip() if bool(self.get_parameter("show_ip").value) else ""
+        self._show_ip = bool(self.get_parameter("show_ip").value)
+        self._ip = _first_non_local_ip() if self._show_ip else ""
+        # Retry interval for IP discovery when network isn't ready at boot.
+        self._ip_retry_interval = 3.0  # seconds between retries
+        self._ip_last_check = time.monotonic()
+        self._ip_resolved = (self._ip not in ("", "?", "127.0.0.1"))
         self.get_logger().info(
             f"OLED node ready (i2c bus={i2c_bus}, addr=0x{i2c_addr:02x}, {width}x{height}). Text topic: {text_topic}"
         )
+        if self._show_ip and not self._ip_resolved:
+            self.get_logger().info("OLED: IP not yet available, will retry periodically")
 
     def _init_oled(self, *, width: int, height: int, rotate_180: bool) -> None:
         prev = getattr(self, "_oled", None)
@@ -424,6 +431,20 @@ class OledNode(Node):
     def _tick(self) -> None:
         if getattr(self, "_oled", None) is None:
             return
+
+        # Retry IP discovery until the network is up.
+        if self._show_ip and not self._ip_resolved:
+            now = time.monotonic()
+            if now - self._ip_last_check >= self._ip_retry_interval:
+                self._ip_last_check = now
+                new_ip = _first_non_local_ip()
+                if new_ip not in ("", "?", "127.0.0.1"):
+                    self._ip = new_ip
+                    self._ip_resolved = True
+                    self.get_logger().info(f"OLED: IP resolved to {new_ip}")
+                else:
+                    self._ip = new_ip  # show "?" until resolved
+
         try:
             buf = self._render()
             self._oled.display_buffer(buf)

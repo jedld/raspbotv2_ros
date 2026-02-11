@@ -56,6 +56,21 @@ def generate_launch_description():
     follow_obstacle_stop_m = LaunchConfiguration('follow_obstacle_stop_m')
     follow_obstacle_slow_m = LaunchConfiguration('follow_obstacle_slow_m')
 
+    # Mecanum strafing during follow
+    follow_strafe_gain = LaunchConfiguration('follow_strafe_gain')
+    follow_max_strafe = LaunchConfiguration('follow_max_strafe')
+    follow_strafe_deadband = LaunchConfiguration('follow_strafe_deadband')
+    follow_strafe_gain_topic = LaunchConfiguration('follow_strafe_gain_topic')
+
+    # IMU feedback for follow
+    follow_imu_enable = LaunchConfiguration('follow_imu_enable')
+    follow_imu_topic = LaunchConfiguration('follow_imu_topic')
+    follow_imu_yaw_topic = LaunchConfiguration('follow_imu_yaw_topic')
+    follow_imu_gyro_damping = LaunchConfiguration('follow_imu_gyro_damping')
+    follow_imu_heading_hold_kp = LaunchConfiguration('follow_imu_heading_hold_kp')
+    follow_imu_heading_hold_deadband = LaunchConfiguration('follow_imu_heading_hold_deadband')
+    follow_gyro_damping_topic = LaunchConfiguration('follow_gyro_damping_topic')
+
     # Depth estimation
     depth_hef_path = LaunchConfiguration('depth_hef_path')
     depth_input_topic = LaunchConfiguration('depth_input_topic')
@@ -115,6 +130,21 @@ def generate_launch_description():
         DeclareLaunchArgument('follow_ultrasonic_topic', default_value='ultrasonic/range'),
         DeclareLaunchArgument('follow_obstacle_stop_m', default_value='0.20'),
         DeclareLaunchArgument('follow_obstacle_slow_m', default_value='0.50'),
+
+        # Mecanum strafing
+        DeclareLaunchArgument('follow_strafe_gain', default_value='0.5'),
+        DeclareLaunchArgument('follow_max_strafe', default_value='0.20'),
+        DeclareLaunchArgument('follow_strafe_deadband', default_value='0.08'),
+        DeclareLaunchArgument('follow_strafe_gain_topic', default_value='follow/strafe_gain'),
+
+        # IMU feedback
+        DeclareLaunchArgument('follow_imu_enable', default_value='true'),
+        DeclareLaunchArgument('follow_imu_topic', default_value='imu/data'),
+        DeclareLaunchArgument('follow_imu_yaw_topic', default_value='imu/yaw_deg'),
+        DeclareLaunchArgument('follow_imu_gyro_damping', default_value='0.15'),
+        DeclareLaunchArgument('follow_imu_heading_hold_kp', default_value='0.5'),
+        DeclareLaunchArgument('follow_imu_heading_hold_deadband', default_value='3.0'),
+        DeclareLaunchArgument('follow_gyro_damping_topic', default_value='follow/gyro_damping'),
 
         # Depth estimation arguments
         DeclareLaunchArgument('depth_hef_path', default_value=''),
@@ -179,6 +209,19 @@ def generate_launch_description():
                 'follow_ultrasonic_topic': follow_ultrasonic_topic,
                 'follow_obstacle_stop_m': follow_obstacle_stop_m,
                 'follow_obstacle_slow_m': follow_obstacle_slow_m,
+
+                'follow_strafe_gain': follow_strafe_gain,
+                'follow_max_strafe': follow_max_strafe,
+                'follow_strafe_deadband': follow_strafe_deadband,
+                'follow_strafe_gain_topic': follow_strafe_gain_topic,
+
+                'follow_imu_enable': follow_imu_enable,
+                'follow_imu_topic': follow_imu_topic,
+                'follow_imu_yaw_topic': follow_imu_yaw_topic,
+                'follow_imu_gyro_damping': follow_imu_gyro_damping,
+                'follow_imu_heading_hold_kp': follow_imu_heading_hold_kp,
+                'follow_imu_heading_hold_deadband': follow_imu_heading_hold_deadband,
+                'follow_gyro_damping_topic': follow_gyro_damping_topic,
 
                 'depth_hef_path': depth_hef_path,
                 'depth_input_topic': depth_input_topic,

@@ -9,7 +9,7 @@ ROS 2 workspace for the **Yahboom Raspbot V2** on a **Raspberry Pi 5** (Ubuntu 2
 | `raspbot_hw` | I2C motor driver, GPIO sensors, USB camera (auto-detect), Pi Camera Module 3, 2DOF gimbal, WS2812 light-bar, OLED, IMU serial bridge (Arduino Nano RP2040 Connect) |
 | `raspbot_bringup` | Unified bringup launch + startup sound |
 | `raspbot_web_video` | Web UI on port 8080 — MJPEG streams, drive (WASD), gimbal, detection overlay, auto-follow controls, snapshots, IMU dashboard, microphone streaming, depth map |
-| `raspbot_hailo_tracking` | Hailo-8 object detection (YOLOv5s person+face), gimbal person tracking, PID auto-follow with obstacle avoidance, monocular depth estimation (fast_depth) |
+| `raspbot_hailo_tracking` | Hailo-8 object detection (YOLOv5s person+face), gimbal person tracking, PID auto-follow with mecanum strafing, IMU feedback & obstacle avoidance, monocular depth estimation (fast_depth) |
 
 ## Quick start
 
@@ -22,6 +22,24 @@ ros2 launch raspbot_bringup bringup.launch.py
 ```
 
 Then open **http://\<pi-ip\>:8080/** in a browser.
+
+## Auto-start on boot
+
+A systemd service launches the full bringup automatically when the Pi powers on.
+The OLED will display the IP address as soon as the network is ready.
+
+```bash
+# Install the service (already done if you followed initial setup)
+sudo cp src/raspbot_ros2/raspbot_bringup/systemd/raspbot.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable raspbot.service
+
+# Manual control
+sudo systemctl start raspbot          # start now
+sudo systemctl stop raspbot           # stop
+sudo systemctl restart raspbot        # restart
+sudo journalctl -u raspbot -f         # live logs
+```
 
 ## Launch arguments
 
@@ -105,6 +123,8 @@ ros2 launch raspbot_bringup bringup.launch.py \
 | `tracking/enable` | `Bool` | → enable person tracking |
 | `tracking/config` | `Int32MultiArray` | → [pan_sign, tilt_sign] |
 | `follow/enable` | `Bool` | → enable auto-follow |
+| `follow/strafe_gain` | `Float64` | → tune strafe intensity |
+| `follow/gyro_damping` | `Float64` | → tune gyro damping |
 | `depth/enable` | `Bool` | → enable/disable depth |
 | `imu/audio_enable` | `Bool` | → enable mic streaming |
 | `imu/calibrate` | `Empty` | → trigger gyro calibration |
@@ -116,7 +136,7 @@ ros2 launch raspbot_bringup bringup.launch.py \
 - **Drive (WASD)**: keyboard teleop with shift-for-speed, auto-stop on keyup
 - **Detection overlay**: bounding boxes drawn on the live stream canvas
 - **Person tracking**: toggle gimbal tracking with pan/tilt invert options
-- **Auto-follow**: PID-based robot following with configurable target area & speed
+- **Auto-follow**: PID-based robot following with mecanum strafing, IMU gyro damping, heading hold, configurable target area & speed
 - **Light bar**: colour picker, per-LED control, breathing/rainbow/chase effects
 - **Snapshots**: capture full-resolution stills to `~/Pictures/raspbot/`
 - **IMU dashboard**: live accelerometer/gyroscope, 3D orientation cube, yaw heading, temperature
@@ -138,6 +158,23 @@ cd firmware/arduino_nano_rp2040
 See `firmware/arduino_nano_rp2040/README.md` for the full serial protocol
 (`$IMU`, `$AUD`, `$CAL`, `$INFO`, `$ERR` output lines; `?`, `C`, `A`/`a`,
 `R`/`G`/`B`/`W`/`O` input commands).
+
+## M5Stack Cardputer controller
+
+The M5Stack Cardputer (ESP32-S3, 240×135 TFT, 56-key keyboard) works as a
+handheld teleop controller — live camera view + WASD keyboard driving, all
+over WiFi (no Bluetooth needed).
+
+```bash
+# Build & flash (requires PlatformIO)
+cd firmware/m5stack_cardputer
+# Edit src/config.h with your WiFi credentials and Pi IP address
+pio run -t upload
+```
+
+Key features: camera toggle (front/gimbal), speed control (+/-), ultrasonic
+distance HUD, collision failsafe indicator, emergency stop (Space).
+See `firmware/m5stack_cardputer/README.md` for the full keyboard map and setup.
 
 ## Hailo-8 models
 

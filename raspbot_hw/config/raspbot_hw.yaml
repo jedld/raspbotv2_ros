@@ -149,6 +149,14 @@ pi_camera:
     fps: 30.0
     jpeg_quality: 80
     topic: "front_camera/compressed"
+    # Autofocus (Pi Camera Module 3 / IMX708 PDAF)
+    #   af_mode:  0 = manual, 1 = auto (single-shot), 2 = continuous
+    #   af_range: 0 = normal, 1 = macro, 2 = full
+    #   af_speed: 0 = normal, 1 = fast
+    # Continuous + full-range + fast is ideal for a moving robot.
+    af_mode: 2
+    af_range: 2
+    af_speed: 1
 
 camera_gimbal:
   ros__parameters:

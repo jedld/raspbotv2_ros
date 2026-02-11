@@ -37,6 +37,14 @@ class PiCameraNode(Node):
         self.declare_parameter('v4l2_device_index', -1)
         # Camera index for libcamera (0 = first CSI camera enumerated)
         self.declare_parameter('camera_index', 0)
+        # Autofocus mode for IMX708 (Pi Camera Module 3).
+        #   0 = manual (no AF), 1 = auto (trigger once), 2 = continuous
+        # Continuous AF is recommended for a moving robot.
+        self.declare_parameter('af_mode', 2)
+        # Autofocus range: 0 = normal, 1 = macro, 2 = full
+        self.declare_parameter('af_range', 2)
+        # Autofocus speed: 0 = normal, 1 = fast
+        self.declare_parameter('af_speed', 1)
 
         self._width = int(self.get_parameter('width').value)
         self._height = int(self.get_parameter('height').value)
@@ -47,6 +55,9 @@ class PiCameraNode(Node):
         self._backend = str(self.get_parameter('backend').value).lower()
         self._v4l2_device_index = int(self.get_parameter('v4l2_device_index').value)
         self._camera_index = int(self.get_parameter('camera_index').value)
+        self._af_mode = int(self.get_parameter('af_mode').value)
+        self._af_range = int(self.get_parameter('af_range').value)
+        self._af_speed = int(self.get_parameter('af_speed').value)
 
         try:
             import cv2  # type: ignore
@@ -105,10 +116,15 @@ class PiCameraNode(Node):
 
             pipelines_to_try = []
 
+            # Build autofocus properties for libcamerasrc.
+            # Newer GStreamer libcamera plugins expose af-mode, af-range,
+            # af-speed as direct element properties (not extra-controls).
+            af_props = self._build_af_properties()
+
             # Pipeline 1: explicit camera-name with auto-negotiation
             if camera_name:
                 pipelines_to_try.append(
-                    f'libcamerasrc camera-name="{camera_name}" ! '
+                    f'libcamerasrc camera-name="{camera_name}"{af_props} ! '
                     f'videoconvert ! videoscale ! '
                     f'video/x-raw,format=BGR,width={self._width},'
                     f'height={self._height} ! '
@@ -117,7 +133,7 @@ class PiCameraNode(Node):
 
             # Pipeline 2: generic libcamerasrc (auto camera)
             pipelines_to_try.append(
-                f'libcamerasrc ! '
+                f'libcamerasrc{af_props} ! '
                 f'videoconvert ! videoscale ! '
                 f'video/x-raw,format=BGR,width={self._width},'
                 f'height={self._height} ! '
@@ -168,6 +184,35 @@ class PiCameraNode(Node):
                             dt = dt.replace('/proc/device-tree', '')
                             return dt
         return ''
+
+    # GStreamer enum names for libcamerasrc AF properties.
+    _AF_MODE_NAMES = {0: 'manual', 1: 'auto', 2: 'continuous'}
+    _AF_RANGE_NAMES = {0: 'normal', 1: 'macro', 2: 'full'}
+    _AF_SPEED_NAMES = {0: 'normal', 1: 'fast'}
+
+    def _build_af_properties(self) -> str:
+        """Build GStreamer element properties for libcamerasrc autofocus.
+
+        Modern GStreamer libcamera plugins (v0.5+) expose AF controls as
+        direct element properties using string enum values:
+            af-mode:  manual | auto | continuous
+            af-range: normal | macro | full
+            af-speed: normal | fast
+        Negative param values disable that property (use camera default).
+        """
+        parts = []
+        name = self._AF_MODE_NAMES.get(self._af_mode)
+        if name:
+            parts.append(f'af-mode={name}')
+        name = self._AF_RANGE_NAMES.get(self._af_range)
+        if name:
+            parts.append(f'af-range={name}')
+        name = self._AF_SPEED_NAMES.get(self._af_speed)
+        if name:
+            parts.append(f'af-speed={name}')
+        if not parts:
+            return ''
+        return ' ' + ' '.join(parts)
 
     def _try_v4l2(self) -> bool:
         """Try OpenCV capture via V4L2 on a specific device index."""

@@ -16,6 +16,7 @@ Hardware reference for the Yahboom Raspbot V2 as used by this ROS 2 workspace.
 | Display | SSD1306 I2C OLED (128×32, address `0x3C`) |
 | LEDs | WS2812 RGB light bar (14 LEDs), controlled via I2C controller |
 | Gimbal | 2DOF pan/tilt servo mount (servo IDs 1=pan, 2=tilt) |
+| Remote controller | M5Stack Cardputer (ESP32-S3, 240×135 TFT, WiFi, 56-key keyboard) — optional |
 
 ## Cameras
 
@@ -158,6 +159,25 @@ These are the defaults used by this workspace. They are **BOARD** numbering, not
 
 > **Note**: GPIO is only used as a fallback for ultrasonic. The preferred
 > backend reads distance via I2C registers `0x1A`/`0x1B`.
+
+## M5Stack Cardputer (optional remote controller)
+
+| Property | Value |
+|---|---|
+| SoC | ESP32-S3FN8 (240 MHz dual-core, 8 MB flash, WiFi 2.4 GHz, BLE 5.0) |
+| Display | 1.14″ 240×135 ST7789V2 IPS TFT |
+| Input | 56-key matrix keyboard |
+| Battery | 120 mAh (internal) + 1400 mAh (StampS3 base) |
+| Connection | WiFi (same network as Raspberry Pi) — **no Bluetooth pairing** |
+| Firmware | PlatformIO (ESP32-S3 Arduino), see `firmware/m5stack_cardputer/` |
+
+The Cardputer connects to the Pi's web server over HTTP to:
+- **Stream camera** via `/stream_front_lo.mjpg` or `/stream_lo.mjpg` (240×180, JPEG q=50)
+- **Send teleop** via `POST /api/cmd_vel` (WASD keyboard → linear/angular velocities)
+- **Read status** via `GET /status` (ultrasonic distance, collision failsafe state)
+
+No new software is needed on the Pi — the Cardputer reuses the existing web
+server endpoints.
 
 ## ROS 2 nodes
 

@@ -1,0 +1,29 @@
+[Unit]
+Description=Raspbot ROS 2 bringup (all nodes)
+After=network-online.target hailort.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jedld
+Group=jedld
+WorkingDirectory=/home/jedld/ros2_foxy
+ExecStart=/home/jedld/ros2_foxy/src/raspbot_ros2/raspbot_bringup/scripts/raspbot_start.sh
+Restart=on-failure
+RestartSec=5
+
+# Give nodes time to shut down cleanly
+TimeoutStopSec=10
+KillMode=mixed
+KillSignal=SIGINT
+
+# Generous environment for hardware access
+SupplementaryGroups=i2c gpio video dialout plugdev
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=raspbot
+
+[Install]
+WantedBy=multi-user.target

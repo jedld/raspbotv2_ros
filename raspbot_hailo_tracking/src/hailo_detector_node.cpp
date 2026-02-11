@@ -4,6 +4,7 @@
 #include <geometry_msgs/msg/vector3.hpp>
 #include <sensor_msgs/msg/compressed_image.hpp>
 #include <sensor_msgs/msg/image.hpp>
+#include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/range.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/float64.hpp>
@@ -137,6 +138,21 @@ public:
         declare_parameter<double>("follow_gimbal_recenter_kp", 0.10);
         declare_parameter<double>("follow_angular_blend", 0.5);
 
+        // Mecanum strafing during follow
+        declare_parameter<double>("follow_strafe_gain", 0.5);      // how much cam_err maps to linear.y (0=no strafe)
+        declare_parameter<double>("follow_max_strafe", 0.20);      // max strafe speed m/s
+        declare_parameter<double>("follow_strafe_deadband", 0.08); // cam_err below this → no strafe
+        declare_parameter<std::string>("follow_strafe_gain_topic", "follow/strafe_gain");
+
+        // IMU feedback for follow (gyro-Z damping + heading hold)
+        declare_parameter<bool>("follow_imu_enable", true);
+        declare_parameter<std::string>("follow_imu_topic", "imu/data");
+        declare_parameter<std::string>("follow_imu_yaw_topic", "imu/yaw_deg");
+        declare_parameter<double>("follow_imu_gyro_damping", 0.15);   // gyro-Z derivative damping on angular cmd
+        declare_parameter<double>("follow_imu_heading_hold_kp", 0.5); // heading hold when driving straight
+        declare_parameter<double>("follow_imu_heading_hold_deadband", 3.0); // degrees
+        declare_parameter<std::string>("follow_gyro_damping_topic", "follow/gyro_damping");
+
         // Ultrasonic obstacle avoidance
         declare_parameter<std::string>("follow_ultrasonic_topic", "ultrasonic/range");
         declare_parameter<double>("follow_obstacle_stop_m", 0.20);
@@ -172,6 +188,8 @@ public:
         follow_enabled_.store(get_parameter("follow_enabled").as_bool());
         follow_target_bbox_area_.store(get_parameter("follow_target_bbox_area").as_double());
         follow_max_linear_.store(get_parameter("follow_max_linear").as_double());
+        follow_strafe_gain_.store(get_parameter("follow_strafe_gain").as_double());
+        follow_gyro_damping_.store(get_parameter("follow_imu_gyro_damping").as_double());
         pan_sign_live_.store(norm_sign(get_parameter("pan_sign").as_int()));
         tilt_sign_live_.store(norm_sign(get_parameter("tilt_sign").as_int()));
 
@@ -222,6 +240,25 @@ public:
                 RCLCPP_INFO(get_logger(), "Follow max linear set to %.3f m/s", v);
             });
 
+        // Runtime-tunable strafe gain and gyro damping (via topics from web UI)
+        const auto strafe_gain_topic = get_parameter("follow_strafe_gain_topic").as_string();
+        follow_strafe_gain_sub_ = create_subscription<std_msgs::msg::Float64>(
+            strafe_gain_topic, 10,
+            [this](const std_msgs::msg::Float64::SharedPtr msg) {
+                const double v = std::max(0.0, std::min(2.0, msg->data));
+                follow_strafe_gain_.store(v);
+                RCLCPP_INFO(get_logger(), "Follow strafe gain set to %.2f", v);
+            });
+
+        const auto gyro_damping_topic = get_parameter("follow_gyro_damping_topic").as_string();
+        follow_gyro_damping_sub_ = create_subscription<std_msgs::msg::Float64>(
+            gyro_damping_topic, 10,
+            [this](const std_msgs::msg::Float64::SharedPtr msg) {
+                const double v = std::max(0.0, std::min(1.0, msg->data));
+                follow_gyro_damping_.store(v);
+                RCLCPP_INFO(get_logger(), "Follow gyro damping set to %.2f", v);
+            });
+
         // Ultrasonic obstacle avoidance
         const auto ultrasonic_topic = get_parameter("follow_ultrasonic_topic").as_string();
         ultrasonic_sub_ = create_subscription<sensor_msgs::msg::Range>(
@@ -232,6 +269,29 @@ public:
                 }
             });
         RCLCPP_INFO(get_logger(), "Ultrasonic topic: %s", ultrasonic_topic.c_str());
+
+        // IMU feedback for follow mode (gyro-Z damping + heading hold)
+        if (get_parameter("follow_imu_enable").as_bool()) {
+            const auto imu_topic = get_parameter("follow_imu_topic").as_string();
+            imu_sub_ = create_subscription<sensor_msgs::msg::Imu>(
+                imu_topic, rclcpp::SensorDataQoS(),
+                [this](const sensor_msgs::msg::Imu::SharedPtr msg) {
+                    if (msg) {
+                        imu_gyro_z_.store(msg->angular_velocity.z);
+                    }
+                });
+            RCLCPP_INFO(get_logger(), "Follow IMU topic: %s", imu_topic.c_str());
+
+            const auto yaw_topic = get_parameter("follow_imu_yaw_topic").as_string();
+            imu_yaw_sub_ = create_subscription<std_msgs::msg::Float64>(
+                yaw_topic, 10,
+                [this](const std_msgs::msg::Float64::SharedPtr msg) {
+                    if (msg) {
+                        imu_yaw_deg_.store(msg->data);
+                    }
+                });
+            RCLCPP_INFO(get_logger(), "Follow IMU yaw topic: %s", yaw_topic.c_str());
+        }
 
         // Safety timer – sends stop when subject is lost for > timeout
         follow_safety_timer_ = create_wall_timer(100ms,
@@ -890,6 +950,81 @@ private:
         // Negative: +err_angular (subject right) → −angular.z (clockwise in ROS).
         double cmd_angular = -(kp_ang * eff_ang + ki_ang * follow_integral_angular_ + kd_ang * d_ang);
 
+        // ---- Mecanum strafing (linear.y) ----
+        //
+        // When the person is to the side, a pure rotation can cause orbiting
+        // (the robot rotates but doesn't close lateral distance).  Adding a
+        // strafe component moves the robot directly toward the target,
+        // producing smoother, more direct tracking.
+        //
+        // cam_err is −1…+1 where positive = person is to the right.
+        // For the robot to move right, we need NEGATIVE linear.y (ROS convention:
+        // +y = left).
+        double cmd_strafe = 0.0;
+        {
+            const double strafe_gain = follow_strafe_gain_.load();
+            const double max_strafe  = get_parameter("follow_max_strafe").as_double();
+            const double strafe_db   = get_parameter("follow_strafe_deadband").as_double();
+
+            if (strafe_gain > 0.0 && std::abs(cam_err) > strafe_db) {
+                // Negative cam_err → person left → +linear.y (strafe left)
+                // Positive cam_err → person right → −linear.y (strafe right)
+                cmd_strafe = -strafe_gain * cam_err;
+                cmd_strafe = std::max(-max_strafe, std::min(max_strafe, cmd_strafe));
+            }
+        }
+
+        // ---- IMU feedback ----
+        //
+        // 1. Gyro-Z damping: subtracts a fraction of the measured yaw rate
+        //    from the angular command.  This acts as a viscous friction term
+        //    that dampens oscillation without slowing the steady-state response.
+        //
+        // 2. Heading hold: when angular error is small (driving mostly straight),
+        //    capture the current yaw and apply a proportional correction to
+        //    maintain that heading.  Prevents the robot from drifting/curving
+        //    during a straight-line approach.
+        if (get_parameter("follow_imu_enable").as_bool()) {
+            // --- Gyro-Z damping ---
+            const double gyro_damping = follow_gyro_damping_.load();
+            if (gyro_damping > 0.0) {
+                const double gyro_z = imu_gyro_z_.load();  // rad/s
+                cmd_angular -= gyro_damping * gyro_z;
+            }
+
+            // --- Heading hold during straight approach ---
+            const double hh_kp = get_parameter("follow_imu_heading_hold_kp").as_double();
+            const double hh_db = get_parameter("follow_imu_heading_hold_deadband").as_double();
+            if (hh_kp > 0.0) {
+                const double current_yaw = imu_yaw_deg_.load();
+                if (std::abs(eff_ang) < db_ang + 0.01) {
+                    // Angular error is in deadband → we're driving "straight".
+                    // Capture heading if not already held.
+                    if (!follow_heading_captured_) {
+                        follow_heading_target_deg_ = current_yaw;
+                        follow_heading_captured_ = true;
+                    }
+                    // Proportional correction to maintain captured heading.
+                    double yaw_err = follow_heading_target_deg_ - current_yaw;
+                    // Normalize to ±180
+                    while (yaw_err >  180.0) yaw_err -= 360.0;
+                    while (yaw_err < -180.0) yaw_err += 360.0;
+                    if (std::abs(yaw_err) > hh_db) {
+                        // Convert degrees to a reasonable angular.z correction.
+                        // Scale: ~0.5 Kp and a few degrees of error → small rad/s.
+                        const double correction = hh_kp * yaw_err * (M_PI / 180.0);
+                        cmd_angular += correction;
+                    }
+                } else {
+                    // Angular error is significant → release heading hold so
+                    // the PID can freely rotate to the target.
+                    follow_heading_captured_ = false;
+                }
+            }
+        } else {
+            follow_heading_captured_ = false;
+        }
+
         // ---- Clamp to safe velocity limits ----
         const double max_lin = follow_max_linear_.load();
         const double max_ang = get_parameter("follow_max_angular").as_double();
@@ -918,13 +1053,15 @@ private:
         // ---- Publish Twist ----
         geometry_msgs::msg::Twist twist;
         twist.linear.x  = cmd_linear;
+        twist.linear.y  = cmd_strafe;
         twist.angular.z = cmd_angular;
         cmd_vel_pub_->publish(twist);
 
         RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 2000,
-            "follow: area=%.3f err_lin=%.3f err_ang=%.3f(cam=%.2f) -> v=%.2f w=%.2f pan=%.0f us=%.2fm",
+            "follow: area=%.3f err_lin=%.3f err_ang=%.3f(cam=%.2f) -> vx=%.2f vy=%.2f w=%.2f pan=%.0f us=%.2fm hh=%d",
             static_cast<double>(bbox_area), err_linear, err_angular, cam_err,
-            cmd_linear, cmd_angular, pan_deg_, ultrasonic_range_m_.load());
+            cmd_linear, cmd_strafe, cmd_angular, pan_deg_, ultrasonic_range_m_.load(),
+            follow_heading_captured_ ? 1 : 0);
     }
 
     /// Called at 10 Hz – manages lost-target state machine:
@@ -1041,6 +1178,7 @@ private:
     {
         geometry_msgs::msg::Twist twist;
         twist.linear.x  = 0.0;
+        twist.linear.y  = 0.0;
         twist.angular.z = 0.0;
         cmd_vel_pub_->publish(twist);
     }
@@ -1052,6 +1190,7 @@ private:
         follow_prev_err_linear_  = 0.0;
         follow_prev_err_angular_ = 0.0;
         follow_prev_time_ = steady_clock::time_point(steady_clock::duration::zero());
+        follow_heading_captured_ = false;
     }
 
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr detections_pub_;
@@ -1091,18 +1230,30 @@ private:
     rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr follow_enable_sub_;
     rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr follow_target_area_sub_;
     rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr follow_max_linear_sub_;
+    rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr follow_strafe_gain_sub_;
+    rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr follow_gyro_damping_sub_;
     rclcpp::Subscription<sensor_msgs::msg::Range>::SharedPtr ultrasonic_sub_;
     std::atomic<double> ultrasonic_range_m_{999.0};
     rclcpp::TimerBase::SharedPtr follow_safety_timer_;
     std::atomic<bool> follow_enabled_{false};
     std::atomic<double> follow_target_bbox_area_{0.04};
     std::atomic<double> follow_max_linear_{0.3};
+    std::atomic<double> follow_strafe_gain_{0.5};
+    std::atomic<double> follow_gyro_damping_{0.15};
     steady_clock::time_point last_follow_detection_time_{steady_clock::duration::zero()};
     steady_clock::time_point follow_prev_time_{steady_clock::duration::zero()};
     double follow_integral_linear_{0.0};
     double follow_integral_angular_{0.0};
     double follow_prev_err_linear_{0.0};
     double follow_prev_err_angular_{0.0};
+
+    // IMU feedback for follow
+    rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
+    rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr imu_yaw_sub_;
+    std::atomic<double> imu_gyro_z_{0.0};     // latest gyro angular_velocity.z (rad/s)
+    std::atomic<double> imu_yaw_deg_{0.0};    // latest integrated yaw heading (degrees)
+    bool follow_heading_captured_{false};      // true when heading hold is active
+    double follow_heading_target_deg_{0.0};   // captured heading to hold
 
     // Gimbal scan-to-reacquire state
     enum class ScanState { IDLE, SWEEPING };
