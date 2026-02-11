@@ -89,6 +89,10 @@ class OdometryNode(Node):
         'return_goal_tolerance_m': '_return_goal_tolerance_m',
         'return_goal_tolerance_rad': '_return_goal_tolerance_rad',
         'return_timeout_sec': '_return_timeout_sec',
+        'odom_vx_scale': '_vx_scale',
+        'odom_vy_scale': '_vy_scale',
+        'odom_zupt_accel_threshold': '_zupt_accel_threshold',
+        'odom_zupt_gyro_threshold': '_zupt_gyro_threshold',
     }
 
     def __init__(self):
@@ -116,6 +120,17 @@ class OdometryNode(Node):
         self.declare_parameter('return_timeout_sec', 120.0)
         self.declare_parameter('return_cmd_vel_topic', 'cmd_vel')
 
+        # Velocity scale factors (calibrate for wheel slip/gear ratio)
+        self.declare_parameter('odom_vx_scale', 1.0)   # forward velocity multiplier
+        self.declare_parameter('odom_vy_scale', 1.0)    # lateral velocity multiplier
+
+        # IMU-based Zero-Velocity Update (ZUPT)
+        self.declare_parameter('odom_zupt_accel_threshold', 0.15)  # m/s² — XY accel below this ≈ stationary
+        self.declare_parameter('odom_zupt_gyro_threshold', 0.05)   # rad/s — gyro below this ≈ not rotating
+
+        # Live path publish rate during recording
+        self.declare_parameter('odom_path_publish_hz', 2.0)  # how often to publish recorded path
+
         # ── Load parameters ───────────────────────────────────────────
         self._publish_hz = self.get_parameter('odom_publish_hz').value
         self._use_imu_yaw = self.get_parameter('odom_use_imu_yaw').value
@@ -131,6 +146,12 @@ class OdometryNode(Node):
         self._return_goal_tolerance_rad = self.get_parameter('return_goal_tolerance_rad').value
         self._return_timeout_sec = self.get_parameter('return_timeout_sec').value
 
+        self._vx_scale = self.get_parameter('odom_vx_scale').value
+        self._vy_scale = self.get_parameter('odom_vy_scale').value
+        self._zupt_accel_threshold = self.get_parameter('odom_zupt_accel_threshold').value
+        self._zupt_gyro_threshold = self.get_parameter('odom_zupt_gyro_threshold').value
+        self._path_publish_hz = self.get_parameter('odom_path_publish_hz').value
+
         # ── Pose state ────────────────────────────────────────────────
         self._x = 0.0  # metres in odom frame
         self._y = 0.0
@@ -144,6 +165,16 @@ class OdometryNode(Node):
         self._imu_yaw: float | None = None      # latest IMU fused yaw (rad)
         self._imu_yaw_offset: float | None = None  # offset between odom yaw and IMU yaw
         self._imu_yaw_deg: float | None = None   # from imu/yaw_deg topic
+
+        # IMU acceleration & gyro for ZUPT and accuracy improvements
+        self._imu_accel_x = 0.0  # body-frame linear acceleration (gravity removed by BNO055)
+        self._imu_accel_y = 0.0
+        self._imu_gyro_z = 0.0   # angular velocity from gyro
+        self._imu_accel_ema = 0.0  # exponential moving average of XY accel magnitude
+        self._imu_gyro_ema = 0.0   # EMA of abs(gyro_z)
+        self._zupt_active = False  # True when zero-velocity update is applied
+        self._last_path_publish = 0.0  # monotonic time of last path publish
+        self._last_status_publish = 0.0  # monotonic time of last recording/returning publish
 
         # Path recording state
         self._recording = False
@@ -199,7 +230,9 @@ class OdometryNode(Node):
         self.get_logger().info(
             f'Odometry node started — '
             f'frame: {self._odom_frame}→{self._child_frame}, '
-            f'hz: {self._publish_hz}, imu_yaw: {self._use_imu_yaw}'
+            f'hz: {self._publish_hz}, imu_yaw: {self._use_imu_yaw}, '
+            f'vx_scale: {self._vx_scale}, vy_scale: {self._vy_scale}, '
+            f'ZUPT accel<{self._zupt_accel_threshold} gyro<{self._zupt_gyro_threshold}'
         )
 
     # ── Parameter change callback ─────────────────────────────────────
@@ -221,12 +254,26 @@ class OdometryNode(Node):
         self._wz = float(msg.angular.z)
 
     def _on_imu(self, msg: Imu) -> None:
-        """Extract fused yaw from IMU quaternion (BNO055)."""
+        """Extract fused yaw, linear acceleration, and angular velocity from IMU."""
         q = msg.orientation
         # Ignore zero quaternion (sensor not ready)
         if q.w == 0.0 and q.x == 0.0 and q.y == 0.0 and q.z == 0.0:
             return
         self._imu_yaw = yaw_from_quaternion(q)
+
+        # Linear acceleration (BNO055 provides gravity-compensated in NDOF mode)
+        self._imu_accel_x = float(msg.linear_acceleration.x)
+        self._imu_accel_y = float(msg.linear_acceleration.y)
+
+        # Angular velocity (gyroscope)
+        self._imu_gyro_z = float(msg.angular_velocity.z)
+
+        # Update EMAs for smoother ZUPT detection (alpha ≈ 0.15 at ~50Hz)
+        accel_mag = math.sqrt(self._imu_accel_x ** 2 + self._imu_accel_y ** 2)
+        gyro_mag = abs(self._imu_gyro_z)
+        alpha = 0.15
+        self._imu_accel_ema = alpha * accel_mag + (1.0 - alpha) * self._imu_accel_ema
+        self._imu_gyro_ema = alpha * gyro_mag + (1.0 - alpha) * self._imu_gyro_ema
 
     def _on_imu_yaw(self, msg: Float64) -> None:
         """Track imu/yaw_deg for possible future use."""
@@ -244,6 +291,21 @@ class OdometryNode(Node):
         if dt <= 0.0 or dt > 1.0:
             return  # skip huge jumps
 
+        try:
+            self._tick_inner(dt, now)
+        except Exception as e:
+            self.get_logger().error(f'[odom] tick error: {e}')
+            # Safety: if we crash during return, stop motors and abort
+            if self._returning:
+                self._returning = False
+                self._return_cmd_pub.publish(Twist())
+                b = Bool()
+                b.data = False
+                self._returning_pub.publish(b)
+                self.get_logger().warn('[odom] return aborted due to error')
+
+    def _tick_inner(self, dt: float, now: float) -> None:
+
         # ── Integrate pose ────────────────────────────────────────────
         self._integrate(dt)
 
@@ -254,12 +316,33 @@ class OdometryNode(Node):
         # ── Publish odometry ──────────────────────────────────────────
         self._publish_odom()
 
+        # ── Periodic status publishing (~2 Hz) ────────────────────────
+        # Continuously publish recording/returning state so subscribers
+        # never miss a one-shot transition message.
+        if (now - self._last_status_publish) >= 0.5:
+            self._last_status_publish = now
+            b_rec = Bool()
+            b_rec.data = self._recording
+            self._recording_pub.publish(b_rec)
+            b_ret = Bool()
+            b_ret.data = self._returning
+            self._returning_pub.publish(b_ret)
+            # Keep the path visible even when not recording
+            if self._waypoints:
+                self._publish_path()
+
         # ── Record waypoints if active ────────────────────────────────
         if self._recording:
             self._maybe_record_waypoint()
+            # Periodically publish the in-progress path for live visualisation
+            if self._path_publish_hz > 0:
+                interval = 1.0 / self._path_publish_hz
+                if (now - self._last_path_publish) >= interval:
+                    self._publish_path()
+                    self._last_path_publish = now
 
     def _integrate(self, dt: float) -> None:
-        """Dead-reckon position from cmd_vel + IMU yaw."""
+        """Dead-reckon position from cmd_vel + IMU yaw, with ZUPT & velocity scaling."""
         if self._use_imu_yaw and self._imu_yaw is not None:
             # Use fused IMU yaw for heading, anchored to odom frame
             if self._imu_yaw_offset is None:
@@ -272,11 +355,31 @@ class OdometryNode(Node):
 
         self._yaw = normalize_angle(self._yaw)
 
+        # Apply velocity scale factors (calibrate for wheel diameter / slip)
+        vx = self._vx * self._vx_scale
+        vy = self._vy * self._vy_scale
+
+        # ── ZUPT (Zero-Velocity Update) ───────────────────────────────
+        # When IMU indicates the robot is physically stationary (low accel + low gyro),
+        # suppress any residual cmd_vel drift to prevent position creep.
+        if (self._imu_accel_ema < self._zupt_accel_threshold and
+                self._imu_gyro_ema < self._zupt_gyro_threshold):
+            # Only apply ZUPT when cmd_vel is also small (avoid blocking intentional moves
+            # that haven't physically started yet due to motor latency)
+            if abs(vx) < 0.01 and abs(vy) < 0.01:
+                vx = 0.0
+                vy = 0.0
+                self._zupt_active = True
+            else:
+                self._zupt_active = False
+        else:
+            self._zupt_active = False
+
         # Transform body velocities to odom frame
         cos_yaw = math.cos(self._yaw)
         sin_yaw = math.sin(self._yaw)
-        dx = (self._vx * cos_yaw - self._vy * sin_yaw) * dt
-        dy = (self._vx * sin_yaw + self._vy * cos_yaw) * dt
+        dx = (vx * cos_yaw - vy * sin_yaw) * dt
+        dy = (vx * sin_yaw + vy * cos_yaw) * dt
 
         self._x += dx
         self._y += dy
@@ -359,6 +462,11 @@ class OdometryNode(Node):
             self._finish_return('timeout')
             return
 
+        # If we've passed all waypoints, do final yaw alignment
+        if self._return_wp_idx >= len(self._return_waypoints):
+            self._return_align_to_origin()
+            return
+
         # Current target waypoint
         tx, ty, tyaw = self._return_waypoints[self._return_wp_idx]
         dx = tx - self._x
@@ -370,11 +478,7 @@ class OdometryNode(Node):
             self._return_wp_idx += 1
             if self._return_wp_idx >= len(self._return_waypoints):
                 # Final waypoint reached — do a final yaw alignment to origin heading
-                yaw_err = normalize_angle(0.0 - self._yaw)
-                if abs(yaw_err) < self._return_goal_tolerance_rad:
-                    self._finish_return('arrived at origin')
-                else:
-                    self._return_align_to_origin()
+                self._return_align_to_origin()
                 return
             return  # will process next waypoint on next tick
 
@@ -506,6 +610,8 @@ class OdometryNode(Node):
                 b.data = False
                 self._recording_pub.publish(b)
                 self.get_logger().info('[odom] auto-stopped recording for return')
+                # Publish the path so it stays visible during the return
+                self._publish_path()
 
             if not self._waypoints:
                 resp.success = False

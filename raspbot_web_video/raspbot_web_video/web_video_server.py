@@ -15,8 +15,10 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from geometry_msgs.msg import Vector3, Twist
+from nav_msgs.msg import Odometry, Path
 from sensor_msgs.msg import CompressedImage, Imu, Range
 from std_msgs.msg import Bool, Empty, Float32, Float64, Int32, Int32MultiArray, String, UInt8MultiArray
+from std_srvs.srv import Trigger
 
 
 INDEX_HTML = """<!doctype html>
@@ -216,6 +218,49 @@ INDEX_HTML = """<!doctype html>
             </div>
         </div>
 
+        <div class=\"card\" id=\"odomCard\">
+            <h2>&#128506; Odometry &amp; Navigation</h2>
+            <p class=\"muted\">Sensor-fused position (cmd_vel + IMU + ZUPT). Record a path and navigate back to the starting point.</p>
+
+            <div style=\"display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start;\">
+                <!-- Path visualisation canvas -->
+                <div style=\"flex:0 0 auto;text-align:center;\">
+                    <canvas id=\"odomCanvas\" width=\"300\" height=\"300\" style=\"display:block;border:1px solid #ddd;border-radius:8px;background:#fafafa;\"></canvas>
+                    <div class=\"kv\" style=\"margin-top:4px;font-size:11px;\">Grid: 0.5 m &nbsp;|&nbsp; <span style=\"color:#e00;\">&#9632;</span> robot &nbsp; <span style=\"color:#08f;\">&#9632;</span> trail &nbsp; <span style=\"color:#0a0;\">&#9632;</span> recorded &nbsp; <span style=\"color:#fa0;\">&#11044;</span> origin</div>
+                </div>
+
+                <!-- Position readout + controls -->
+                <div style=\"flex:1 1 280px;\">
+                    <table style=\"width:100%;border-collapse:collapse;font-size:13px;font-family:ui-monospace,monospace;\">
+                        <tr><td style=\"padding:3px 6px;color:#666;\">X (m)</td><td id=\"odomX\" style=\"padding:3px 6px;font-weight:bold;\">0.000</td></tr>
+                        <tr><td style=\"padding:3px 6px;color:#666;\">Y (m)</td><td id=\"odomY\" style=\"padding:3px 6px;font-weight:bold;\">0.000</td></tr>
+                        <tr><td style=\"padding:3px 6px;color:#666;\">Yaw (°)</td><td id=\"odomYaw\" style=\"padding:3px 6px;font-weight:bold;\">0.0</td></tr>
+                        <tr><td style=\"padding:3px 6px;color:#666;\">Speed</td><td id=\"odomSpeed\" style=\"padding:3px 6px;\">0.000 m/s</td></tr>
+                        <tr><td style=\"padding:3px 6px;color:#666;\">Distance</td><td id=\"odomDist\" style=\"padding:3px 6px;\">0.000 m</td></tr>
+                    </table>
+
+                    <div style=\"margin-top:10px;display:flex;flex-direction:column;gap:6px;\">
+                        <div style=\"display:flex;gap:6px;flex-wrap:wrap;\">
+                            <button id=\"odomSetOrigin\" title=\"Reset position to (0,0,0)\">&#127937; Set Origin</button>
+                            <button class=\"primary\" id=\"odomStartRec\" title=\"Start recording path waypoints\">&#9899; Record</button>
+                            <button id=\"odomStopRec\" title=\"Stop recording\" style=\"display:none;\">&#9724; Stop Rec</button>
+                        </div>
+                        <div style=\"display:flex;gap:6px;flex-wrap:wrap;\">
+                            <button class=\"primary\" id=\"odomReturnBtn\" title=\"Navigate back to origin along recorded path\">&#8617; Return to Origin</button>
+                            <button class=\"danger\" id=\"odomCancelBtn\" title=\"Cancel return-to-origin\" style=\"display:none;\">&#10006; Cancel Return</button>
+                        </div>
+                    </div>
+
+                    <div class=\"kv\" style=\"margin-top:8px;\">
+                        Status: <span id=\"odomStatus\">idle</span>
+                    </div>
+                    <div class=\"kv\" style=\"margin-top:3px;font-size:11px;color:#888;\">
+                        Waypoints: <span id=\"odomWpCount\">0</span> &nbsp;|&nbsp; Trail: <span id=\"odomTrailCount\">0</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <div class=\"card\" id=\"imuCard\">
             <h2>&#129517; IMU &amp; Orientation</h2>
             <p class=\"muted\">Live 6-axis IMU data from Arduino Nano RP2040 Connect. Publishes on <code>imu/data</code>.</p>
@@ -225,28 +270,8 @@ INDEX_HTML = """<!doctype html>
             <div style=\"display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start;\">
                 <!-- 3D Robot orientation view -->
                 <div style=\"flex:0 0 auto;text-align:center;\">
-                    <div id=\"imuScene\" style=\"width:200px;height:200px;perspective:600px;margin:0 auto;\">
-                        <div id=\"imuCube\" style=\"width:140px;height:80px;position:relative;transform-style:preserve-3d;margin:60px auto 0;\">
-                            <!-- Front -->
-                            <div style=\"position:absolute;width:140px;height:80px;background:rgba(51,51,51,0.92);border:2px solid #555;display:flex;align-items:center;justify-content:center;color:#0f0;font-size:11px;font-weight:bold;transform:translateZ(40px);\">FRONT</div>
-                            <!-- Back -->
-                            <div style=\"position:absolute;width:140px;height:80px;background:rgba(68,68,68,0.88);border:2px solid #555;display:flex;align-items:center;justify-content:center;color:#999;font-size:11px;transform:rotateY(180deg) translateZ(40px);\">BACK</div>
-                            <!-- Left -->
-                            <div style=\"position:absolute;width:80px;height:80px;background:rgba(60,60,60,0.88);border:2px solid #555;display:flex;align-items:center;justify-content:center;color:#f80;font-size:10px;transform:rotateY(-90deg) translateZ(70px);left:30px;\">L</div>
-                            <!-- Right -->
-                            <div style=\"position:absolute;width:80px;height:80px;background:rgba(60,60,60,0.88);border:2px solid #555;display:flex;align-items:center;justify-content:center;color:#08f;font-size:10px;transform:rotateY(90deg) translateZ(70px);left:30px;\">R</div>
-                            <!-- Top -->
-                            <div style=\"position:absolute;width:140px;height:80px;background:rgba(80,200,80,0.25);border:2px solid #4a4;display:flex;align-items:center;justify-content:center;color:#4a4;font-size:10px;transform:rotateX(90deg) translateZ(40px);\">TOP</div>
-                            <!-- Bottom -->
-                            <div style=\"position:absolute;width:140px;height:80px;background:rgba(180,50,50,0.25);border:2px solid #a44;transform:rotateX(-90deg) translateZ(40px);\"></div>
-                            <!-- Wheels (decorative) -->
-                            <div style=\"position:absolute;width:16px;height:16px;border-radius:50%;background:#222;border:2px solid #666;top:80px;left:6px;transform:translateZ(44px);\"></div>
-                            <div style=\"position:absolute;width:16px;height:16px;border-radius:50%;background:#222;border:2px solid #666;top:80px;right:6px;transform:translateZ(44px);\"></div>
-                            <div style=\"position:absolute;width:16px;height:16px;border-radius:50%;background:#222;border:2px solid #666;top:80px;left:6px;transform:translateZ(-44px);\"></div>
-                            <div style=\"position:absolute;width:16px;height:16px;border-radius:50%;background:#222;border:2px solid #666;top:80px;right:6px;transform:translateZ(-44px);\"></div>
-                        </div>
-                    </div>
-                    <div class=\"kv\" style=\"margin-top:4px;\">Yaw: <span id=\"imuYawLabel\">0.0</span>°</div>
+                    <canvas id=\"imuRobotCanvas\" width=\"200\" height=\"200\" style=\"display:block;margin:0 auto;border:1px solid #ddd;border-radius:8px;background:#fafafa;\"></canvas>
+                    <div class=\"kv\" style=\"margin-top:4px;\">Yaw: <span id=\"imuYawLabel\">0.0</span>° &nbsp; P: <span id=\"imuPitchLabel\">0.0</span>° &nbsp; R: <span id=\"imuRollLabel\">0.0</span>°</div>
                 </div>
 
                 <!-- Data readouts -->
@@ -926,7 +951,7 @@ INDEX_HTML = """<!doctype html>
                 imuYawLabel.textContent = yaw.toFixed(1);
 
                 // Update 3D cube orientation
-                updateCube(d);
+                drawRobotTopDown(d);
                 // Update compass
                 drawCompass(yaw, d.rotate_target_deg);
                 // Update BNO055 calibration card
@@ -948,16 +973,100 @@ INDEX_HTML = """<!doctype html>
             }
         }
 
-        function updateCube(d) {
-            if (!d) return;
-            // Server computes pitch/roll from BNO055 quaternion when
-            // available, falling back to accel-trig for LSM6DSOX.
-            const pitch = d.pitch_deg || 0;
-            const roll  = d.roll_deg  || 0;
-            const yaw   = d.yaw_deg   || 0;
+        const imuRobotCanvas = document.getElementById('imuRobotCanvas');
+        const imuPitchLabel = document.getElementById('imuPitchLabel');
+        const imuRollLabel = document.getElementById('imuRollLabel');
 
-            // CSS transform: rotations applied in order
-            imuCube.style.transform = 'rotateX(' + (-pitch).toFixed(1) + 'deg) rotateZ(' + (roll).toFixed(1) + 'deg) rotateY(' + (-yaw).toFixed(1) + 'deg)';
+        function drawRobotTopDown(d) {
+            if (!d) return;
+            const ctx = imuRobotCanvas.getContext('2d');
+            const W = imuRobotCanvas.width, H = imuRobotCanvas.height;
+            const cx = W / 2, cy = H / 2;
+            ctx.clearRect(0, 0, W, H);
+
+            const yaw = (d.yaw_deg || 0) * Math.PI / 180;
+            const pitch = d.pitch_deg || 0;
+            const roll = d.roll_deg || 0;
+
+            // Update pitch/roll labels
+            imuPitchLabel.textContent = pitch.toFixed(1);
+            imuRollLabel.textContent = roll.toFixed(1);
+
+            ctx.save();
+            ctx.translate(cx, cy);
+            ctx.rotate(-yaw);  // top-down: +yaw = CCW on canvas = CW in real world (robot-right)
+
+            // Robot body (rectangle: wider than tall = mecanum platform)
+            const bw = 60, bh = 80; // width x length (forward is up = -Y)
+            ctx.fillStyle = '#e8e8e8';
+            ctx.strokeStyle = '#888';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.roundRect(-bw/2, -bh/2, bw, bh, 6);
+            ctx.fill();
+            ctx.stroke();
+
+            // 4 mecanum wheels
+            const wheelW = 12, wheelH = 22;
+            ctx.fillStyle = '#555';
+            ctx.strokeStyle = '#333';
+            ctx.lineWidth = 1.5;
+            const wx = bw/2 + 2, wy = bh/2 - 16;
+            [[-wx, -wy], [wx - wheelW, -wy], [-wx, wy - wheelH + 4], [wx - wheelW, wy - wheelH + 4]].forEach(([x, y]) => {
+                ctx.beginPath();
+                ctx.roundRect(x, y, wheelW, wheelH, 3);
+                ctx.fill();
+                ctx.stroke();
+            });
+
+            // Forward indicator (arrow at front)
+            ctx.beginPath();
+            ctx.moveTo(0, -bh/2 - 4);
+            ctx.lineTo(-10, -bh/2 - 16);
+            ctx.lineTo(10, -bh/2 - 16);
+            ctx.closePath();
+            ctx.fillStyle = '#0c0';
+            ctx.fill();
+            ctx.font = 'bold 9px ui-monospace, monospace';
+            ctx.textAlign = 'center';
+            ctx.fillStyle = '#0a0';
+            ctx.fillText('FWD', 0, -bh/2 - 18);
+
+            // Left/Right labels
+            ctx.fillStyle = '#f80';
+            ctx.font = '9px ui-monospace, monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText('L', -bw/2 - 10, 3);
+            ctx.fillStyle = '#08f';
+            ctx.fillText('R', bw/2 + 10, 3);
+
+            // Tilt indicator (cross-hair shifted by pitch/roll)
+            // Pitch shifts dot forward/back, roll shifts left/right
+            const tiltScale = 0.6;  // pixels per degree
+            const tiltX = roll * tiltScale;   // roll-right → dot moves right
+            const tiltY = -pitch * tiltScale; // pitch-forward → dot moves up (forward)
+            const tiltMag = Math.sqrt(pitch*pitch + roll*roll);
+            // Tilt cross
+            ctx.strokeStyle = '#ccc';
+            ctx.lineWidth = 0.5;
+            ctx.beginPath(); ctx.moveTo(-15, 0); ctx.lineTo(15, 0); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(0, -15); ctx.lineTo(0, 15); ctx.stroke();
+            // Tilt dot
+            ctx.beginPath();
+            ctx.arc(tiltX, tiltY, 4, 0, 2 * Math.PI);
+            ctx.fillStyle = tiltMag > 10 ? '#e00' : tiltMag > 3 ? '#fa0' : '#0a0';
+            ctx.fill();
+
+            ctx.restore();
+
+            // Cardinal labels (fixed, don't rotate)
+            ctx.font = '10px ui-monospace, monospace';
+            ctx.textAlign = 'center';
+            ctx.fillStyle = '#999';
+            ctx.fillText('0°', cx, 12);
+            ctx.fillText('180°', cx, H - 4);
+            ctx.fillText('90°', W - 8, cy + 4);
+            ctx.fillText('-90°', 14, cy + 4);
         }
 
         function drawCompass(yaw, target) {
@@ -1508,6 +1617,311 @@ INDEX_HTML = """<!doctype html>
         }, 500);
 
         // ──────────────────────────────────────────────────────────────
+        // Odometry & Navigation
+        // ──────────────────────────────────────────────────────────────
+        const odomCanvas = document.getElementById('odomCanvas');
+        const odomCtx = odomCanvas.getContext('2d');
+        const odomX = document.getElementById('odomX');
+        const odomY = document.getElementById('odomY');
+        const odomYaw = document.getElementById('odomYaw');
+        const odomSpeed = document.getElementById('odomSpeed');
+        const odomDist = document.getElementById('odomDist');
+        const odomStatus = document.getElementById('odomStatus');
+        const odomWpCount = document.getElementById('odomWpCount');
+        const odomTrailCount = document.getElementById('odomTrailCount');
+        const odomSetOriginBtn = document.getElementById('odomSetOrigin');
+        const odomStartRecBtn = document.getElementById('odomStartRec');
+        const odomStopRecBtn = document.getElementById('odomStopRec');
+        const odomReturnBtn = document.getElementById('odomReturnBtn');
+        const odomCancelBtn = document.getElementById('odomCancelBtn');
+
+        let odomRecording = false;
+        let odomReturning = false;
+        let odomTotalDist = 0.0;
+        let odomPrevX = null, odomPrevY = null;
+        let odomBusy = false; // prevent double-clicks during service calls
+
+        function drawOdomMap(data) {
+            const W = odomCanvas.width, H = odomCanvas.height;
+            const cx = W / 2, cy = H / 2;
+            odomCtx.clearRect(0, 0, W, H);
+
+            // Determine scale from trail + path + current position
+            let maxR = 0.5; // minimum half-range in metres
+            const allPts = (data.trail || []).concat(data.path || []);
+            allPts.push([data.x, data.y]);
+            allPts.push([0, 0]); // origin always visible
+            for (const p of allPts) {
+                const ax = Math.abs(p[0]), ay = Math.abs(p[1]);
+                if (ax > maxR) maxR = ax;
+                if (ay > maxR) maxR = ay;
+            }
+            maxR *= 1.2; // add margin
+            const scale = (Math.min(W, H) / 2 - 16) / maxR;
+
+            // Top-down view: +X (forward) = UP, +Y (left) = LEFT
+            function toCanvas(mx, my) {
+                return [cx - my * scale, cy - mx * scale];
+            }
+
+            // Grid lines (auto-adjust spacing for zoom level)
+            let gridStep = 0.5;
+            if (maxR > 5) gridStep = 2.0;
+            else if (maxR > 2) gridStep = 1.0;
+
+            odomCtx.strokeStyle = '#e8e8e8';
+            odomCtx.lineWidth = 0.5;
+            odomCtx.font = '9px ui-monospace, monospace';
+            odomCtx.fillStyle = '#bbb';
+            odomCtx.textAlign = 'left';
+            for (let g = gridStep; g <= maxR; g += gridStep) {
+                // Horizontal grid lines (constant X values → horizontal on canvas)
+                const [, gy1] = toCanvas(g, 0);
+                if (gy1 > 0 && gy1 < H) {
+                    odomCtx.beginPath(); odomCtx.moveTo(0, gy1); odomCtx.lineTo(W, gy1); odomCtx.stroke();
+                    odomCtx.fillText(g.toFixed(1) + 'm', 3, gy1 - 2);
+                }
+                const [, gy2] = toCanvas(-g, 0);
+                if (gy2 > 0 && gy2 < H) {
+                    odomCtx.beginPath(); odomCtx.moveTo(0, gy2); odomCtx.lineTo(W, gy2); odomCtx.stroke();
+                }
+                // Vertical grid lines (constant Y values → vertical on canvas)
+                const [gx1] = toCanvas(0, g);
+                if (gx1 > 0 && gx1 < W) {
+                    odomCtx.beginPath(); odomCtx.moveTo(gx1, 0); odomCtx.lineTo(gx1, H); odomCtx.stroke();
+                }
+                const [gx2] = toCanvas(0, -g);
+                if (gx2 > 0 && gx2 < W) {
+                    odomCtx.beginPath(); odomCtx.moveTo(gx2, 0); odomCtx.lineTo(gx2, H); odomCtx.stroke();
+                }
+            }
+            // Axes through origin
+            odomCtx.strokeStyle = '#ccc';
+            odomCtx.lineWidth = 1;
+            const [axOx, axOy] = toCanvas(0, 0);
+            odomCtx.beginPath(); odomCtx.moveTo(axOx, 0); odomCtx.lineTo(axOx, H); odomCtx.stroke(); // Y-axis line (vertical)
+            odomCtx.beginPath(); odomCtx.moveTo(0, axOy); odomCtx.lineTo(W, axOy); odomCtx.stroke(); // X-axis line (horizontal)
+
+            // Axis labels
+            odomCtx.fillStyle = '#999';
+            odomCtx.font = '10px ui-monospace, monospace';
+            odomCtx.textAlign = 'center';
+            odomCtx.fillText('+X (fwd)', axOx, 12); // top = forward
+            odomCtx.textAlign = 'right';
+            odomCtx.fillText('+Y (left)', 10 > axOx ? axOx - 4 : 10, axOy - 5);
+
+            // Origin marker (orange dot)
+            odomCtx.beginPath();
+            odomCtx.arc(axOx, axOy, 5, 0, 2 * Math.PI);
+            odomCtx.fillStyle = '#fa0';
+            odomCtx.fill();
+            odomCtx.strokeStyle = '#c80';
+            odomCtx.lineWidth = 1.5;
+            odomCtx.stroke();
+
+            // Recorded path (green, thicker)
+            const path = data.path || [];
+            if (path.length > 1) {
+                odomCtx.beginPath();
+                let [px0, py0] = toCanvas(path[0][0], path[0][1]);
+                odomCtx.moveTo(px0, py0);
+                for (let i = 1; i < path.length; i++) {
+                    const [px, py] = toCanvas(path[i][0], path[i][1]);
+                    odomCtx.lineTo(px, py);
+                }
+                odomCtx.strokeStyle = 'rgba(0, 170, 0, 0.8)';
+                odomCtx.lineWidth = 3;
+                odomCtx.stroke();
+                // Start/end markers on recorded path
+                if (path.length >= 2) {
+                    const [sx, sy] = toCanvas(path[0][0], path[0][1]);
+                    odomCtx.beginPath(); odomCtx.arc(sx, sy, 3, 0, 2*Math.PI);
+                    odomCtx.fillStyle = '#0a0'; odomCtx.fill();
+                    const last = path[path.length - 1];
+                    const [ex, ey] = toCanvas(last[0], last[1]);
+                    odomCtx.beginPath(); odomCtx.arc(ex, ey, 3, 0, 2*Math.PI);
+                    odomCtx.fillStyle = '#070'; odomCtx.fill();
+                }
+            }
+
+            // Live trail (blue)
+            const trail = data.trail || [];
+            if (trail.length > 1) {
+                odomCtx.beginPath();
+                let [tx0, ty0] = toCanvas(trail[0][0], trail[0][1]);
+                odomCtx.moveTo(tx0, ty0);
+                for (let i = 1; i < trail.length; i++) {
+                    const [tx, ty] = toCanvas(trail[i][0], trail[i][1]);
+                    odomCtx.lineTo(tx, ty);
+                }
+                odomCtx.strokeStyle = 'rgba(0, 128, 255, 0.6)';
+                odomCtx.lineWidth = 1.5;
+                odomCtx.stroke();
+            }
+
+            // Robot position (red dot) + heading arrow
+            const [rx, ry] = toCanvas(data.x, data.y);
+            const yawRad = (data.yaw_deg || 0) * Math.PI / 180;
+            // Heading arrow: in toCanvas frame, a displacement (dx_odom, dy_odom)
+            // maps to canvas (-dy_odom*s, -dx_odom*s). Heading dir = (cos(yaw), sin(yaw))
+            const arrowLen = 18;
+            const tipCx = rx - Math.sin(yawRad) * arrowLen;
+            const tipCy = ry - Math.cos(yawRad) * arrowLen;
+
+            odomCtx.beginPath();
+            odomCtx.moveTo(rx, ry);
+            odomCtx.lineTo(tipCx, tipCy);
+            odomCtx.strokeStyle = '#e00';
+            odomCtx.lineWidth = 2.5;
+            odomCtx.lineCap = 'round';
+            odomCtx.stroke();
+            // Arrowhead
+            const aAngle = Math.atan2(tipCy - ry, tipCx - rx);
+            odomCtx.beginPath();
+            odomCtx.moveTo(tipCx, tipCy);
+            odomCtx.lineTo(tipCx - 7*Math.cos(aAngle - 0.45), tipCy - 7*Math.sin(aAngle - 0.45));
+            odomCtx.moveTo(tipCx, tipCy);
+            odomCtx.lineTo(tipCx - 7*Math.cos(aAngle + 0.45), tipCy - 7*Math.sin(aAngle + 0.45));
+            odomCtx.stroke();
+            odomCtx.lineCap = 'butt';
+
+            // Robot dot
+            odomCtx.beginPath();
+            odomCtx.arc(rx, ry, 5, 0, 2 * Math.PI);
+            odomCtx.fillStyle = '#e00';
+            odomCtx.fill();
+        }
+
+        function updateOdomUI(d) {
+            odomX.textContent = d.x != null ? d.x.toFixed(3) : '\u2014';
+            odomY.textContent = d.y != null ? d.y.toFixed(3) : '\u2014';
+            odomYaw.textContent = d.yaw_deg != null ? d.yaw_deg.toFixed(1) : '\u2014';
+            const spd = Math.sqrt((d.vx||0)*(d.vx||0) + (d.vy||0)*(d.vy||0));
+            odomSpeed.textContent = spd.toFixed(3) + ' m/s';
+
+            // Accumulate distance from position deltas
+            if (odomPrevX !== null && odomPrevY !== null) {
+                const dx = (d.x||0) - odomPrevX;
+                const dy = (d.y||0) - odomPrevY;
+                const seg = Math.sqrt(dx*dx + dy*dy);
+                if (seg < 0.5) odomTotalDist += seg; // skip teleports
+            }
+            odomPrevX = d.x || 0;
+            odomPrevY = d.y || 0;
+            odomDist.textContent = odomTotalDist.toFixed(3) + ' m';
+
+            odomWpCount.textContent = String((d.path || []).length);
+            odomTrailCount.textContent = String((d.trail || []).length);
+
+            // Update button visibility & status based on state
+            odomRecording = !!d.recording;
+            odomReturning = !!d.returning;
+            if (odomReturning) {
+                odomStatus.textContent = '\u21a9 RETURNING TO ORIGIN';
+                odomStatus.style.color = '#05a';
+                odomCancelBtn.style.display = '';
+                odomReturnBtn.style.display = 'none';
+            } else {
+                odomCancelBtn.style.display = 'none';
+                odomReturnBtn.style.display = '';
+                if (odomRecording) {
+                    odomStatus.textContent = '\u23fa RECORDING';
+                    odomStatus.style.color = '#b00';
+                    odomStartRecBtn.style.display = 'none';
+                    odomStopRecBtn.style.display = '';
+                } else {
+                    odomStartRecBtn.style.display = '';
+                    odomStopRecBtn.style.display = 'none';
+                    if (d.last_age_s != null && d.last_age_s < 2) {
+                        odomStatus.textContent = 'active';
+                        odomStatus.style.color = '#080';
+                    } else {
+                        odomStatus.textContent = 'waiting for data\u2026';
+                        odomStatus.style.color = '#888';
+                    }
+                }
+            }
+
+            drawOdomMap(d);
+        }
+
+        async function fetchOdom() {
+            try {
+                const r = await fetch('/api/odom', {cache: 'no-store'});
+                if (!r.ok) return;
+                const d = await r.json();
+                updateOdomUI(d);
+            } catch(e) {}
+        }
+
+        // Poll odometry at 5 Hz
+        setInterval(fetchOdom, 200);
+        fetchOdom();
+
+        async function odomServiceCall(endpoint) {
+            if (odomBusy) return;
+            odomBusy = true;
+            // Disable all odom buttons during call
+            [odomSetOriginBtn, odomStartRecBtn, odomStopRecBtn, odomReturnBtn, odomCancelBtn]
+                .forEach(b => b.disabled = true);
+            odomStatus.textContent = '\u231b working\u2026';
+            odomStatus.style.color = '#888';
+            try {
+                const r = await fetch(endpoint, {method: 'POST'});
+                const d = await r.json();
+                if (d.message) {
+                    odomStatus.textContent = d.message;
+                    odomStatus.style.color = d.ok ? '#080' : '#b00';
+                }
+            } catch(e) {
+                odomStatus.textContent = 'error';
+                odomStatus.style.color = '#b00';
+            } finally {
+                odomBusy = false;
+                [odomSetOriginBtn, odomStartRecBtn, odomStopRecBtn, odomReturnBtn, odomCancelBtn]
+                    .forEach(b => b.disabled = false);
+                // Immediately refresh state so buttons/status update right away
+                await fetchOdom();
+            }
+        }
+
+        odomSetOriginBtn.addEventListener('click', async () => {
+            odomTotalDist = 0.0;
+            odomPrevX = null;
+            odomPrevY = null;
+            // Optimistic UI: flash confirmation immediately
+            odomStatus.textContent = '\u231b resetting\u2026';
+            odomStatus.style.color = '#888';
+            await odomServiceCall('/api/odom/set_origin');
+        });
+
+        odomStartRecBtn.addEventListener('click', async () => {
+            // Optimistic: swap buttons immediately
+            odomStartRecBtn.style.display = 'none';
+            odomStopRecBtn.style.display = '';
+            odomStatus.textContent = '\u23fa RECORDING';
+            odomStatus.style.color = '#b00';
+            await odomServiceCall('/api/odom/start_recording');
+        });
+        odomStopRecBtn.addEventListener('click', async () => {
+            odomStopRecBtn.style.display = 'none';
+            odomStartRecBtn.style.display = '';
+            await odomServiceCall('/api/odom/stop_recording');
+        });
+        odomReturnBtn.addEventListener('click', async () => {
+            odomReturnBtn.style.display = 'none';
+            odomCancelBtn.style.display = '';
+            odomStatus.textContent = '\u21a9 RETURNING TO ORIGIN';
+            odomStatus.style.color = '#05a';
+            await odomServiceCall('/api/odom/return_to_origin');
+        });
+        odomCancelBtn.addEventListener('click', async () => {
+            odomCancelBtn.style.display = 'none';
+            odomReturnBtn.style.display = '';
+            await odomServiceCall('/api/odom/cancel_return');
+        });
+
+        // ──────────────────────────────────────────────────────────────
         // Depth Map (Hailo-8 fast_depth)
         // ──────────────────────────────────────────────────────────────
         const depthToggleBtn = document.getElementById('depthToggleBtn');
@@ -1936,6 +2350,54 @@ class WebVideoNode(Node):
             f"active={cl_active_topic}, tracking={cl_tracking_topic}"
         )
 
+        # ── Odometry integration ──────────────────────────────────────
+        self.declare_parameter("odom_topic", "odom")
+        self.declare_parameter("odom_path_topic", "odom/path")
+        self.declare_parameter("odom_recording_topic", "odom/recording")
+        self.declare_parameter("odom_returning_topic", "odom/returning")
+
+        odom_topic = str(self.get_parameter("odom_topic").value)
+        odom_path_topic = str(self.get_parameter("odom_path_topic").value)
+        odom_recording_topic = str(self.get_parameter("odom_recording_topic").value)
+        odom_returning_topic = str(self.get_parameter("odom_returning_topic").value)
+
+        self._odom_x = 0.0
+        self._odom_y = 0.0
+        self._odom_yaw_deg = 0.0
+        self._odom_vx = 0.0
+        self._odom_vy = 0.0
+        self._odom_wz = 0.0
+        self._odom_last_monotonic = 0.0
+        self._odom_recording = False
+        self._odom_returning = False
+        self._odom_path_xy: list = []  # [(x, y), ...] from Path messages
+        self._odom_trail_xy: list = []  # live breadcrumb trail from Odometry
+
+        self._odom_sub = self.create_subscription(
+            Odometry, odom_topic, self._on_odom, 10
+        )
+        self._odom_path_sub = self.create_subscription(
+            Path, odom_path_topic, self._on_odom_path, 10
+        )
+        self._odom_recording_sub = self.create_subscription(
+            Bool, odom_recording_topic, self._on_odom_recording, 10
+        )
+        self._odom_returning_sub = self.create_subscription(
+            Bool, odom_returning_topic, self._on_odom_returning, 10
+        )
+
+        # Service clients for odometry services
+        self._odom_set_origin_cli = self.create_client(Trigger, 'odom/set_origin')
+        self._odom_start_recording_cli = self.create_client(Trigger, 'odom/start_recording')
+        self._odom_stop_recording_cli = self.create_client(Trigger, 'odom/stop_recording')
+        self._odom_return_to_origin_cli = self.create_client(Trigger, 'odom/return_to_origin')
+        self._odom_cancel_return_cli = self.create_client(Trigger, 'odom/cancel_return')
+
+        self.get_logger().info(
+            f"Odometry topics: odom={odom_topic}, path={odom_path_topic}, "
+            f"recording={odom_recording_topic}, returning={odom_returning_topic}"
+        )
+
     @staticmethod
     def _clamp(x: float, lo: float, hi: float) -> float:
         return max(lo, min(hi, x))
@@ -2099,6 +2561,13 @@ class WebVideoNode(Node):
                 'active': bool(self._cliff_failsafe_active),
                 'sensor_state': int(self._cliff_sensor_state),
             },
+            'odometry': {
+                'x': round(self._odom_x, 4),
+                'y': round(self._odom_y, 4),
+                'yaw_deg': round(self._odom_yaw_deg, 2),
+                'recording': bool(self._odom_recording),
+                'returning': bool(self._odom_returning),
+            },
         }
 
     def _on_detections(self, msg: String) -> None:
@@ -2234,12 +2703,22 @@ class WebVideoNode(Node):
             ay_eq = -2.0 * (qw * qx + qy * qz)
             az_eq = 2.0 * (qx * qx + qy * qy) - 1.0
             denom_p = ay_eq * ay_eq + az_eq * az_eq
-            self._imu_pitch_deg = math.degrees(
+            raw_pitch = math.degrees(
                 math.atan2(ax_eq, math.sqrt(denom_p))
             ) if denom_p > 1e-6 else 0.0
-            self._imu_roll_deg = math.degrees(
+            raw_roll = math.degrees(
                 math.atan2(-ay_eq, az_eq)
             ) if (abs(az_eq) > 1e-6 or abs(ay_eq) > 1e-6) else 0.0
+            # Compensate for BNO055 mounted upside-down (az_eq < 0 ≈ Z-down).
+            # When inverted, raw_roll reads ≈ ±180° on a flat surface.
+            if az_eq < -0.3:  # sensor Z axis pointing downward
+                raw_pitch = -raw_pitch
+                if raw_roll > 0:
+                    raw_roll -= 180.0
+                else:
+                    raw_roll += 180.0
+            self._imu_pitch_deg = raw_pitch
+            self._imu_roll_deg = raw_roll
             self._imu_has_quaternion = True
         else:
             # Fallback: derive pitch/roll from raw accelerometer
@@ -2598,6 +3077,94 @@ class WebVideoNode(Node):
         self._cliff_failsafe_active = False
         self.get_logger().info("Cliff failsafe disabled via web UI")
 
+    # ── Odometry integration ──────────────────────────────────────
+
+    def _on_odom(self, msg: Odometry) -> None:
+        self._odom_x = msg.pose.pose.position.x
+        self._odom_y = msg.pose.pose.position.y
+        self._odom_vx = msg.twist.twist.linear.x
+        self._odom_vy = msg.twist.twist.linear.y
+        self._odom_wz = msg.twist.twist.angular.z
+        # Extract yaw from quaternion
+        q = msg.pose.pose.orientation
+        siny = 2.0 * (q.w * q.z + q.x * q.y)
+        cosy = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+        self._odom_yaw_deg = math.degrees(math.atan2(siny, cosy))
+        self._odom_last_monotonic = time.monotonic()
+        # Live breadcrumb trail (keep every ~5cm or so, cap at 2000 points)
+        trail = self._odom_trail_xy
+        if not trail or (
+            (self._odom_x - trail[-1][0]) ** 2 +
+            (self._odom_y - trail[-1][1]) ** 2 > 0.0025
+        ):
+            trail.append((self._odom_x, self._odom_y))
+            if len(trail) > 2000:
+                self._odom_trail_xy = trail[-2000:]
+
+    def _on_odom_path(self, msg: Path) -> None:
+        pts = []
+        for ps in msg.poses:
+            pts.append((ps.pose.position.x, ps.pose.position.y))
+        self._odom_path_xy = pts
+
+    def _on_odom_recording(self, msg: Bool) -> None:
+        self._odom_recording = msg.data
+
+    def _on_odom_returning(self, msg: Bool) -> None:
+        self._odom_returning = msg.data
+
+    def get_odom_dict(self) -> dict:
+        now = time.monotonic()
+        age = None
+        if self._odom_last_monotonic > 0.0:
+            age = round(max(0.0, now - self._odom_last_monotonic), 3)
+        return {
+            'x': round(self._odom_x, 4),
+            'y': round(self._odom_y, 4),
+            'yaw_deg': round(self._odom_yaw_deg, 2),
+            'vx': round(self._odom_vx, 3),
+            'vy': round(self._odom_vy, 3),
+            'wz': round(self._odom_wz, 3),
+            'recording': bool(self._odom_recording),
+            'returning': bool(self._odom_returning),
+            'trail': list(self._odom_trail_xy),  # send full trail (up to 2000 points)
+            'path': self._odom_path_xy,
+            'last_age_s': age,
+        }
+
+    def _call_trigger_service(self, client, name: str) -> dict:
+        if not client.service_is_ready():
+            if not client.wait_for_service(timeout_sec=0.3):
+                self.get_logger().warn(f"[odom] service {name} not available")
+                return {'ok': False, 'message': f'Service {name} not available'}
+        req = Trigger.Request()
+        future = client.call_async(req)
+        # Poll for completion — the MultiThreadedExecutor handles the callback
+        deadline = time.monotonic() + 2.0
+        while not future.done() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        if future.done() and future.result() is not None:
+            result = future.result()
+            return {'ok': result.success, 'message': result.message}
+        return {'ok': False, 'message': 'Service call timed out'}
+
+    def odom_set_origin(self) -> dict:
+        self._odom_trail_xy.clear()
+        self._odom_path_xy.clear()
+        return self._call_trigger_service(self._odom_set_origin_cli, 'odom/set_origin')
+
+    def odom_start_recording(self) -> dict:
+        return self._call_trigger_service(self._odom_start_recording_cli, 'odom/start_recording')
+
+    def odom_stop_recording(self) -> dict:
+        return self._call_trigger_service(self._odom_stop_recording_cli, 'odom/stop_recording')
+
+    def odom_return_to_origin(self) -> dict:
+        return self._call_trigger_service(self._odom_return_to_origin_cli, 'odom/return_to_origin')
+
+    def odom_cancel_return(self) -> dict:
+        return self._call_trigger_service(self._odom_cancel_return_cli, 'odom/cancel_return')
+
     # ── Rotate-to-angle controller ────────────────────────────────────
 
     def start_rotate(self, target_deg: float, speed: float = 0.5) -> None:
@@ -2713,6 +3280,12 @@ def make_handler(
     collision_failsafe_disabler=None,
     cliff_failsafe_enabler=None,
     cliff_failsafe_disabler=None,
+    odom_provider=None,
+    odom_set_origin=None,
+    odom_start_recording=None,
+    odom_stop_recording=None,
+    odom_return_to_origin=None,
+    odom_cancel_return=None,
 ):
     boundary = b"--frame"
     fps = max(float(fps_limit), 1.0)
@@ -2842,6 +3415,26 @@ def make_handler(
                         payload = imu_provider()
                     except Exception:
                         payload = {'error': 'imu_provider_failed'}
+                body = (json.dumps(payload) + "\n").encode("utf-8")
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-cache")
+                self.end_headers()
+                self.wfile.write(body)
+                try:
+                    self.wfile.flush()
+                except Exception:
+                    pass
+                return
+
+            if path == "/api/odom":
+                payload = {}
+                if callable(odom_provider):
+                    try:
+                        payload = odom_provider()
+                    except Exception:
+                        payload = {'error': 'odom_provider_failed'}
                 body = (json.dumps(payload) + "\n").encode("utf-8")
                 self.send_response(HTTPStatus.OK)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -3669,6 +4262,33 @@ def make_handler(
                 self.end_headers()
                 return
 
+            # ── Odometry service endpoints ───────────────────────────
+            odom_service_map = {
+                '/api/odom/set_origin': odom_set_origin,
+                '/api/odom/start_recording': odom_start_recording,
+                '/api/odom/stop_recording': odom_stop_recording,
+                '/api/odom/return_to_origin': odom_return_to_origin,
+                '/api/odom/cancel_return': odom_cancel_return,
+            }
+            if path in odom_service_map:
+                handler_fn = odom_service_map[path]
+                if not callable(handler_fn):
+                    self.send_response(HTTPStatus.NOT_IMPLEMENTED)
+                    self.end_headers()
+                    return
+                try:
+                    result = handler_fn()
+                    body = (json.dumps(result) + '\n').encode('utf-8')
+                    self.send_response(HTTPStatus.OK)
+                    self.send_header('Content-Type', 'application/json; charset=utf-8')
+                    self.send_header('Content-Length', str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                except Exception:
+                    self.send_response(HTTPStatus.INTERNAL_SERVER_ERROR)
+                    self.end_headers()
+                return
+
             self.send_response(HTTPStatus.NOT_FOUND)
             self.send_header('Content-Type', 'text/plain; charset=utf-8')
             self.end_headers()
@@ -3729,6 +4349,12 @@ def main() -> None:
         collision_failsafe_disabler=node.collision_failsafe_disable,
         cliff_failsafe_enabler=node.cliff_failsafe_enable,
         cliff_failsafe_disabler=node.cliff_failsafe_disable,
+        odom_provider=node.get_odom_dict,
+        odom_set_origin=node.odom_set_origin,
+        odom_start_recording=node.odom_start_recording,
+        odom_stop_recording=node.odom_stop_recording,
+        odom_return_to_origin=node.odom_return_to_origin,
+        odom_cancel_return=node.odom_cancel_return,
     )
     httpd = ThreadingHTTPServer((bind, port), handler_cls)
     # Allow the serve loop to wake up periodically so Ctrl-C / rclpy shutdown is responsive.

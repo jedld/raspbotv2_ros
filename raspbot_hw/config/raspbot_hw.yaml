@@ -318,10 +318,22 @@ odometry:
     cmd_vel_topic: "cmd_vel"
     imu_topic: "imu/data"
     imu_yaw_topic: "imu/yaw_deg"
+    # Velocity scale factors — calibrate for wheel slip / gear ratio mismatch.
+    # Drive the robot a known distance (e.g. 1 m) and adjust these so
+    # reported distance matches reality.  >1.0 = robot under-reports distance.
+    odom_vx_scale: 1.0
+    odom_vy_scale: 1.0
+    # IMU-based Zero-Velocity Update (ZUPT) — prevents position drift when
+    # the robot is physically stationary.  Uses BNO055 gravity-compensated
+    # linear acceleration + gyro to detect stillness.
+    odom_zupt_accel_threshold: 0.15   # m/s²  (XY accel EMA below this ≈ stationary)
+    odom_zupt_gyro_threshold: 0.05    # rad/s  (gyro EMA below this ≈ not rotating)
     # Path recording: capture a waypoint every N metres or N radians of change
     odom_record_interval_m: 0.05
     odom_record_interval_rad: 0.10   # ~5.7 deg
     odom_max_waypoints: 5000
+    # Publish the recorded path during recording at this rate for live visualisation
+    odom_path_publish_hz: 2.0
     # Return-to-origin controller
     return_linear_speed: 0.15        # m/s
     return_angular_speed: 0.6        # rad/s
