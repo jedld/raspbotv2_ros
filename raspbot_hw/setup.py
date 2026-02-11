@@ -32,6 +32,7 @@ setup(
             'bno055_serial = raspbot_hw.bno055_serial_node:main',
             'oled = raspbot_hw.oled_node:main',
             'pi_camera = raspbot_hw.pi_camera_node:main',
+            'odometry = raspbot_hw.odometry_node:main',
         ],
     },
 )

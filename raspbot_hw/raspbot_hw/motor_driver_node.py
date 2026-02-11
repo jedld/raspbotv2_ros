@@ -66,6 +66,11 @@ class MotorDriverNode(Node):
         # i.e. heading-hold only engages when the user is driving "straight"
         self.declare_parameter('gyro_heading_hold_deadband_rad', 0.05)
 
+        # Turning gate for heading-hold: disable heading-hold when any turn command is present,
+        # and keep it disabled briefly after turning to avoid fighting rotate-to-angle near target.
+        self.declare_parameter('gyro_heading_hold_turn_disable_rad', 0.005)
+        self.declare_parameter('gyro_heading_hold_turn_cooldown_sec', 0.25)
+
         # Extended PID gains (upgrade P-only heading-hold to full PID)
         self.declare_parameter('gyro_heading_hold_ki', 1.5)
         self.declare_parameter('gyro_heading_hold_kd', 0.8)
@@ -162,12 +167,15 @@ class MotorDriverNode(Node):
         self._heading_hold_gain = float(self.get_parameter('gyro_heading_hold_gain').value)
         self._heading_hold_max = float(self.get_parameter('gyro_heading_hold_max_correction').value)
         self._heading_hold_deadband = float(self.get_parameter('gyro_heading_hold_deadband_rad').value)
+        self._heading_hold_turn_disable_rad = float(self.get_parameter('gyro_heading_hold_turn_disable_rad').value)
+        self._heading_hold_turn_cooldown_sec = float(self.get_parameter('gyro_heading_hold_turn_cooldown_sec').value)
         self._imu_topic = str(self.get_parameter('imu_topic').value)
         self._gyro_yaw_rate = 0.0  # latest gyro angular_velocity.z (rad/s)
         self._gyro_correction = 0.0  # current correction PWM delta
         self._cmd_angular_z = 0.0  # latest commanded angular.z from cmd_vel
         self._cmd_vx = 0.0  # latest commanded linear.x from cmd_vel
         self._cmd_vy = 0.0  # latest commanded linear.y from cmd_vel
+        self._last_turn_cmd_time = 0.0  # time.time() when we last saw a non-trivial angular.z command
         self._imu_calibrated = False  # gated until imu/calibrated is True
         self._imu_has_quaternion = False  # True when BNO055 fused orientation is available
         # Drive direction tracking: detect transitions between forward/strafe/diagonal
@@ -370,6 +378,8 @@ class MotorDriverNode(Node):
         'gyro_heading_hold_kd': '_heading_hold_kd',
         'gyro_heading_hold_max_correction': '_heading_hold_max',
         'gyro_heading_hold_deadband_rad': '_heading_hold_deadband',
+        'gyro_heading_hold_turn_disable_rad': '_heading_hold_turn_disable_rad',
+        'gyro_heading_hold_turn_cooldown_sec': '_heading_hold_turn_cooldown_sec',
         'gyro_heading_hold_strafe_correction_deadband_pwm': '_heading_hold_strafe_corr_deadband_pwm',
         'pwm_slew_rate_strafe': '_pwm_slew_rate_strafe',
         'trim_fl': '_trim_fl',
@@ -440,8 +450,11 @@ class MotorDriverNode(Node):
             self._lateral_correction = 0.0
             return
 
+        now = time.time()
+
         # ── Gate: user is intentionally turning ───────────────────────
-        if abs(self._cmd_angular_z) > self._heading_hold_deadband:
+        recently_turning = (now - self._last_turn_cmd_time) < self._heading_hold_turn_cooldown_sec
+        if abs(self._cmd_angular_z) > self._heading_hold_turn_disable_rad or recently_turning:
             self._gyro_correction = 0.0
             # Preserve integral — motor asymmetry is valid across headings
             self._heading_target_deg = None
@@ -457,8 +470,6 @@ class MotorDriverNode(Node):
             self._last_heading_hold_time = None
             self._lateral_correction = 0.0
             return
-
-        now = time.time()
 
         # ── Capture heading target on transition to straight driving ──
         if self._heading_target_deg is None:
@@ -798,6 +809,9 @@ class MotorDriverNode(Node):
         self._cmd_angular_z = wz  # stash for heading-hold
         self._cmd_vx = vx
         self._cmd_vy = vy
+
+        if abs(wz) > self._heading_hold_turn_disable_rad:
+            self._last_turn_cmd_time = time.time()
 
         # ── Detect drive-direction transitions ────────────────────────
         # Reset heading-hold PID state when switching between forward and

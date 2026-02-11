@@ -1,0 +1,7 @@
+Metadata-Version: 2.1
+Name: raspbot-hw
+Version: 0.1.0
+Summary: Hardware drivers for Yahboom Raspbot V2.
+Maintainer: user
+Maintainer-email: user@todo.todo
+License: Apache-2.0

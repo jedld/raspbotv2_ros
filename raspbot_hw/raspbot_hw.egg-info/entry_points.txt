@@ -1,0 +1,13 @@
+[console_scripts]
+bno055_serial = raspbot_hw.bno055_serial_node:main
+camera_gimbal = raspbot_hw.camera_gimbal_node:main
+gpio_sensors = raspbot_hw.gpio_sensors_node:main
+imu_serial = raspbot_hw.imu_serial_node:main
+lightbar = raspbot_hw.lightbar_node:main
+motor_driver = raspbot_hw.motor_driver_node:main
+motor_id_test = raspbot_hw.motor_id_test_node:main
+odometry = raspbot_hw.odometry_node:main
+oled = raspbot_hw.oled_node:main
+opencv_camera = raspbot_hw.opencv_camera_node:main
+pi_camera = raspbot_hw.pi_camera_node:main
+ultrasonic = raspbot_hw.ultrasonic_node:main

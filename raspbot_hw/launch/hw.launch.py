@@ -18,6 +18,7 @@ def generate_launch_description():
     enable_imu = LaunchConfiguration('enable_imu')
     enable_bno055 = LaunchConfiguration('enable_bno055')
     enable_front_camera = LaunchConfiguration('enable_front_camera')
+    enable_odometry = LaunchConfiguration('enable_odometry')
     params_file = LaunchConfiguration('params_file')
 
     default_params_file = PathJoinSubstitution([
@@ -37,6 +38,7 @@ def generate_launch_description():
         DeclareLaunchArgument('enable_imu', default_value='true'),
         DeclareLaunchArgument('enable_bno055', default_value='false'),
         DeclareLaunchArgument('enable_front_camera', default_value='false'),
+        DeclareLaunchArgument('enable_odometry', default_value='true'),
         DeclareLaunchArgument('params_file', default_value=default_params_file),
 
         Node(
@@ -123,5 +125,14 @@ def generate_launch_description():
             output='screen',
             parameters=[params_file],
             condition=IfCondition(enable_front_camera),
+        ),
+
+        Node(
+            package='raspbot_hw',
+            executable='odometry',
+            name='odometry',
+            output='screen',
+            parameters=[params_file],
+            condition=IfCondition(enable_odometry),
         ),
     ])
