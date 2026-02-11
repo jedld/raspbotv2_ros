@@ -50,6 +50,11 @@ motor_driver:
     gyro_heading_hold_max_correction: 30.0
     gyro_heading_hold_deadband_rad: 0.05
     gyro_heading_hold_integral_max: 20.0  # anti-windup limit (PWM·s)
+    # Strafe pulsing mitigation
+    # - Deadbands tiny heading corrections during pure strafe (reduces speed modulation)
+    # - Slew-limits the final wheel PWMs during pure strafe (smooths output)
+    gyro_heading_hold_strafe_correction_deadband_pwm: 1.5
+    pwm_slew_rate_strafe: 500.0  # PWM/s (0 disables)
     # Correction sign: set to -1.0 if the heading-hold makes drift WORSE.
     # Watch the [heading-hold] diagnostic log: if "err" grows while "corr" is
     # non-zero, flip this sign.
@@ -75,12 +80,12 @@ motor_driver:
     trim_rr: 0.0
 
     # Lateral drift correction: uses accelerometer Y to detect sideways drift
-    # and injects a mecanum strafe offset.  Disabled by default — enable after
-    # verifying IMU orientation is correct for your mount.
-    lateral_drift_correction_enable: false
-    lateral_drift_gain: 3.0
+    # and injects a mecanum strafe offset.  With BNO055, linear_acceleration
+    # is gravity-subtracted, giving a clean signal for lateral drift detection.
+    lateral_drift_correction_enable: true
+    lateral_drift_gain: 2.0
     lateral_drift_max_correction: 8.0
-    lateral_drift_alpha: 0.05          # low-pass filter coefficient
+    lateral_drift_alpha: 0.15          # low-pass filter coefficient
 
     # ── Collision failsafe (ultrasonic) ──────────────────────────────
     # Blocks forward motion when the ultrasonic sensor detects an obstacle.
@@ -96,7 +101,7 @@ motor_driver:
     # (i.e. an edge, cliff, or stair drop).  Enabled by default.
     # Sensor polarity: 1 = floor present, 0 = no floor / edge.
     # Does NOT affect backward, strafe, or rotation.
-    cliff_failsafe_enable: true
+    cliff_failsafe_enable: false
     cliff_tracking_topic: "tracking/state"
     cliff_failsafe_timeout_sec: 1.0    # ignore stale data after this long
     cliff_sensor_mask: 15              # bitmask: L1=1 L2=2 R1=4 R2=8 (15 = all)

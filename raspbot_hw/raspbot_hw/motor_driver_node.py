@@ -70,6 +70,12 @@ class MotorDriverNode(Node):
         self.declare_parameter('gyro_heading_hold_ki', 1.5)
         self.declare_parameter('gyro_heading_hold_kd', 0.8)
         self.declare_parameter('gyro_heading_hold_integral_max', 20.0)
+        # Strafe-specific stabilizers
+        # Small deadband on the PWM correction during pure strafe helps prevent
+        # tiny gyro-noise-driven corrections from modulating lateral speed.
+        self.declare_parameter('gyro_heading_hold_strafe_correction_deadband_pwm', 0.0)
+        # Optional output smoothing during pure strafe (PWM per second). 0 disables.
+        self.declare_parameter('pwm_slew_rate_strafe', 0.0)
         self.declare_parameter('imu_yaw_topic', 'imu/yaw_deg')
         # Correction sign: set to -1.0 if the heading-hold makes drift WORSE.
         # This flips the entire PID output without touching IMU axis config.
@@ -160,13 +166,22 @@ class MotorDriverNode(Node):
         self._gyro_yaw_rate = 0.0  # latest gyro angular_velocity.z (rad/s)
         self._gyro_correction = 0.0  # current correction PWM delta
         self._cmd_angular_z = 0.0  # latest commanded angular.z from cmd_vel
+        self._cmd_vx = 0.0  # latest commanded linear.x from cmd_vel
+        self._cmd_vy = 0.0  # latest commanded linear.y from cmd_vel
         self._imu_calibrated = False  # gated until imu/calibrated is True
         self._imu_has_quaternion = False  # True when BNO055 fused orientation is available
+        # Drive direction tracking: detect transitions between forward/strafe/diagonal
+        # to reset PID state that is mode-specific (integral, adapted trim).
+        self._prev_drive_dir = 'stopped'  # 'stopped' | 'forward' | 'strafe' | 'diagonal'
 
         # PID extended state
         self._heading_hold_ki = float(self.get_parameter('gyro_heading_hold_ki').value)
         self._heading_hold_kd = float(self.get_parameter('gyro_heading_hold_kd').value)
         self._heading_integral_max = float(self.get_parameter('gyro_heading_hold_integral_max').value)
+        self._heading_hold_strafe_corr_deadband_pwm = float(
+            self.get_parameter('gyro_heading_hold_strafe_correction_deadband_pwm').value
+        )
+        self._pwm_slew_rate_strafe = float(self.get_parameter('pwm_slew_rate_strafe').value)
         self._heading_hold_sign = float(self.get_parameter('heading_hold_sign').value)
         self._heading_integral = 0.0
         self._heading_target_deg = None  # captured on transition to straight driving
@@ -230,6 +245,12 @@ class MotorDriverNode(Node):
         self._fr_pwm = 0.0
         self._rl_pwm = 0.0
         self._rr_pwm = 0.0
+
+        # Last PWMs sent to hardware (for optional slew limiting)
+        self._sent_fl_pwm = 0.0
+        self._sent_fr_pwm = 0.0
+        self._sent_rl_pwm = 0.0
+        self._sent_rr_pwm = 0.0
 
         self._prev_nonzero = False
 
@@ -349,16 +370,22 @@ class MotorDriverNode(Node):
         'gyro_heading_hold_kd': '_heading_hold_kd',
         'gyro_heading_hold_max_correction': '_heading_hold_max',
         'gyro_heading_hold_deadband_rad': '_heading_hold_deadband',
+        'gyro_heading_hold_strafe_correction_deadband_pwm': '_heading_hold_strafe_corr_deadband_pwm',
+        'pwm_slew_rate_strafe': '_pwm_slew_rate_strafe',
         'trim_fl': '_trim_fl',
         'trim_fr': '_trim_fr',
         'trim_rl': '_trim_rl',
         'trim_rr': '_trim_rr',
         'collision_stop_distance_m': '_collision_stop_dist',
         'collision_slow_distance_m': '_collision_slow_dist',
+        'lateral_drift_gain': '_lateral_drift_gain',
+        'lateral_drift_max_correction': '_lateral_drift_max',
+        'lateral_drift_alpha': '_lateral_drift_alpha',
     }
     _TUNABLE_BOOL_PARAMS = {
         'collision_failsafe_enable': '_collision_enable',
         'cliff_failsafe_enable': '_cliff_enable',
+        'lateral_drift_correction_enable': '_lateral_drift_enable',
     }
 
     def _on_param_change(self, params) -> SetParametersResult:
@@ -453,33 +480,52 @@ class MotorDriverNode(Node):
         while error < -180.0:
             error += 360.0
 
+        # Pure strafe (vy only) behaves differently than forward driving:
+        # - heading-hold is still useful to prevent yaw rotation
+        # - but the forward-drive integral / trim can cause wobble
+        is_strafing = abs(self._cmd_vy) > 0.01 and abs(self._cmd_vx) < 0.01
+        pid_scale = 0.6 if is_strafing else 1.0
+
         # ── PID terms ─────────────────────────────────────────────────
         # P: proportional to heading position error
-        p_term = self._heading_hold_gain * error
+        p_term = self._heading_hold_gain * error * pid_scale
 
         # I: accumulates to learn constant motor asymmetry
-        self._heading_integral += error * dt
-        self._heading_integral = clamp(
-            self._heading_integral,
-            -self._heading_integral_max,
-            self._heading_integral_max,
-        )
-        i_term = self._heading_hold_ki * self._heading_integral
+        # Freeze the integrator during pure strafe to avoid oscillation from
+        # mode-specific biases. Direction-change handling already resets it.
+        if not is_strafing:
+            self._heading_integral += error * dt
+            self._heading_integral = clamp(
+                self._heading_integral,
+                -self._heading_integral_max,
+                self._heading_integral_max,
+            )
+            i_term = self._heading_hold_ki * self._heading_integral
+        else:
+            i_term = 0.0
 
         # D: damps oscillation using gyro yaw rate
         yaw_rate_dps = self._gyro_yaw_rate * RAD_TO_DEG
-        d_term = -self._heading_hold_kd * yaw_rate_dps
+        d_term = -self._heading_hold_kd * yaw_rate_dps * pid_scale
 
         # Apply correction sign (flip entire PID if IMU axis is inverted)
         raw_correction = self._heading_hold_sign * (p_term + i_term + d_term)
+        if (
+            is_strafing
+            and self._heading_hold_strafe_corr_deadband_pwm > 0.0
+            and abs(raw_correction) < self._heading_hold_strafe_corr_deadband_pwm
+        ):
+            raw_correction = 0.0
         self._gyro_correction = clamp(
             raw_correction, -self._heading_hold_max, self._heading_hold_max
         )
         self._heading_error_deg = error  # stash for diagnostics
 
         # ── Adaptive trim: slowly extract DC bias from sustained correction
+        # Only adapt during forward/backward driving — strafe has different
+        # motor roles and would pollute the forward-drive trim.
         total_corr = self._gyro_correction + self._adapted_trim
-        if self._trim_adapt_enable and abs(total_corr) > 0.5:
+        if self._trim_adapt_enable and abs(total_corr) > 0.5 and not is_strafing:
             adapt_step = self._trim_adapt_rate * dt
             if total_corr > 0.5:
                 self._adapted_trim = min(
@@ -498,20 +544,24 @@ class MotorDriverNode(Node):
                 f'I={i_term:+.1f} D={d_term:+.1f} → corr={self._gyro_correction:+.1f} '
                 f'trim={self._adapted_trim:+.1f} '
                 f'yaw={self._imu_yaw_deg:.1f}° target={self._heading_target_deg:.1f}° '
-                f'sign={self._heading_hold_sign:+.0f}'
+                f'sign={self._heading_hold_sign:+.0f} '
+                f'dir={self._prev_drive_dir} lat={self._lateral_correction:+.1f}'
             )
 
         # ── Lateral drift correction (accelerometer, mecanum) ─────────
         # When BNO055 is active, linear_acceleration is gravity-subtracted
-        # so we can use a tighter threshold and less aggressive filtering.
-        if self._lateral_drift_enable:
+        # so we can use a tighter threshold and more responsive filtering.
+        # Lateral drift correction should not run during commanded strafe,
+        # since accel_y will contain the intended lateral acceleration.
+        is_forwardish = abs(self._cmd_vx) > 0.01
+        if self._lateral_drift_enable and is_forwardish and not is_strafing:
             if getattr(self, '_imu_has_quaternion', False):
-                # BNO055: gravity already removed → cleaner signal
-                alpha = max(self._lateral_drift_alpha - 0.1, 0.3)
+                # BNO055: gravity already removed → cleaner signal, respond faster
+                alpha = max(self._lateral_drift_alpha, 0.25)
                 threshold = 0.08  # m/s²
             else:
-                # LSM6DSOX: raw accel includes gravity → more filtering
-                alpha = self._lateral_drift_alpha
+                # LSM6DSOX: raw accel includes gravity → heavier filtering
+                alpha = min(self._lateral_drift_alpha, 0.05)
                 threshold = 0.15  # m/s²
             self._lateral_accel_filtered = (
                 alpha * accel_y + (1.0 - alpha) * self._lateral_accel_filtered
@@ -523,6 +573,9 @@ class MotorDriverNode(Node):
                 )
             else:
                 self._lateral_correction = 0.0
+        else:
+            self._lateral_accel_filtered = 0.0
+            self._lateral_correction = 0.0
 
     # ── Collision failsafe ─────────────────────────────────────────
     def _on_ultrasonic(self, msg: Range) -> None:
@@ -743,6 +796,34 @@ class MotorDriverNode(Node):
         vy = float(getattr(msg.linear, 'y', 0.0))
         wz = float(msg.angular.z)
         self._cmd_angular_z = wz  # stash for heading-hold
+        self._cmd_vx = vx
+        self._cmd_vy = vy
+
+        # ── Detect drive-direction transitions ────────────────────────
+        # Reset heading-hold PID state when switching between forward and
+        # strafe because the integral / adapted-trim from one mode is not
+        # valid in the other.
+        has_vx = abs(vx) > 0.01
+        has_vy = abs(vy) > 0.01
+        if has_vx and has_vy:
+            new_dir = 'diagonal'
+        elif has_vx:
+            new_dir = 'forward'
+        elif has_vy:
+            new_dir = 'strafe'
+        else:
+            new_dir = 'stopped'
+
+        if new_dir != self._prev_drive_dir and self._prev_drive_dir != 'stopped' and new_dir != 'stopped':
+            # Direction changed while moving — reset PID to avoid carryover
+            self._heading_target_deg = None
+            self._last_heading_hold_time = None
+            self._heading_integral = 0.0
+            self.get_logger().debug(
+                f'Drive direction change ({self._prev_drive_dir}→{new_dir}): '
+                f'heading-hold PID reset'
+            )
+        self._prev_drive_dir = new_dir
 
         # ── Apply collision failsafe before kinematics ────────────────
         vx = self._apply_collision_failsafe(vx)
@@ -862,6 +943,16 @@ class MotorDriverNode(Node):
             return sign * float(self._min_pwm)
         return pwm
 
+    def _slew_limit_pwm(self, desired: float, previous: float, max_delta: float) -> float:
+        if max_delta <= 0.0:
+            return desired
+        delta = desired - previous
+        if delta > max_delta:
+            return previous + max_delta
+        if delta < -max_delta:
+            return previous - max_delta
+        return desired
+
     def _tick(self) -> None:
         now = time.time()
         if self._last_cmd_time is None:
@@ -909,7 +1000,11 @@ class MotorDriverNode(Node):
                 # ── IMU corrections ───────────────────────────────────
                 if self._heading_hold_enable:
                     # PID heading-hold + adaptive trim (yaw correction)
-                    c = self._gyro_correction + self._adapted_trim
+                    # During pure strafe, the forward-drive adapted trim is not
+                    # valid (different motor roles), so scale it down.
+                    is_strafing = abs(self._cmd_vy) > 0.01 and abs(self._cmd_vx) < 0.01
+                    trim_scale = 0.2 if is_strafing else 1.0
+                    c = self._gyro_correction + self._adapted_trim * trim_scale
                     if abs(c) > 0.01:
                         fl = clamp(fl + c, -self._max_pwm, self._max_pwm)
                         rl = clamp(rl + c, -self._max_pwm, self._max_pwm)
@@ -930,6 +1025,19 @@ class MotorDriverNode(Node):
                 rl = clamp(rl + self._trim_rl, -self._max_pwm, self._max_pwm)
                 rr = clamp(rr + self._trim_rr, -self._max_pwm, self._max_pwm)
 
+                # Optional: strafe-only output smoothing to reduce speed pulsing
+                if is_strafing and self._pwm_slew_rate_strafe > 0.0:
+                    dt_send = (
+                        self._min_write_period
+                        if self._last_write_time <= 0.0
+                        else clamp(now - self._last_write_time, 0.0, 0.2)
+                    )
+                    max_delta = self._pwm_slew_rate_strafe * dt_send
+                    fl = self._slew_limit_pwm(fl, self._sent_fl_pwm, max_delta)
+                    fr = self._slew_limit_pwm(fr, self._sent_fr_pwm, max_delta)
+                    rl = self._slew_limit_pwm(rl, self._sent_rl_pwm, max_delta)
+                    rr = self._slew_limit_pwm(rr, self._sent_rr_pwm, max_delta)
+
                 self._car.set_motor_pwms(
                     fl,
                     fr,
@@ -941,6 +1049,11 @@ class MotorDriverNode(Node):
                     motor_id_rl=self._motor_id_rl,
                     motor_id_rr=self._motor_id_rr,
                 )
+
+                self._sent_fl_pwm = fl
+                self._sent_fr_pwm = fr
+                self._sent_rl_pwm = rl
+                self._sent_rr_pwm = rr
             else:
                 left = self._apply_startup_kick(self._left_pwm) if kick_active else self._left_pwm
                 right = self._apply_startup_kick(self._right_pwm) if kick_active else self._right_pwm
