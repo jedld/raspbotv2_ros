@@ -6,16 +6,20 @@ ROS 2 workspace for the **Yahboom Raspbot V2** on a **Raspberry Pi 5** (Ubuntu 2
 
 | Package | Description |
 |---|---|
-| `raspbot_hw` | I2C motor driver, GPIO sensors, USB camera (auto-detect), Pi Camera Module 3, 2DOF gimbal, WS2812 light-bar, OLED, IMU serial bridge (Arduino Nano RP2040 Connect) |
-| `raspbot_bringup` | Unified bringup launch + startup sound |
-| `raspbot_web_video` | Web UI on port 8080 — MJPEG streams, drive (WASD), gimbal, detection overlay, auto-follow controls, snapshots, IMU dashboard, microphone streaming, depth map |
-| `raspbot_hailo_tracking` | Hailo-8 object detection (YOLOv5s person+face), gimbal person tracking, PID auto-follow with mecanum strafing, IMU feedback & obstacle avoidance, monocular depth estimation (fast_depth) |
+| `raspbot_hw` | Mecanum motor driver (PID heading-hold, adaptive trim, collision/cliff failsafe), GPIO sensors, USB camera (auto-detect), Pi Camera Module 3 (PDAF autofocus), 2DOF gimbal (IMU tilt compensation), WS2812 light-bar, OLED, IMU (Arduino + BNO055 9-DOF), odometry with path recording & return-to-origin, YDLidar T-mini Plus |
+| `raspbot_bringup` | Unified bringup launch + startup sound + systemd service |
+| `raspbot_teleop` | Terminal-based keyboard teleop (mecanum strafe) + gimbal teleop |
+| `raspbot_web_video` | Web UI on port 8080 — MJPEG streams, drive (WASD), gimbal, detection overlay, auto-follow, LiDAR visualisation, odometry path canvas, collision/cliff failsafe controls, snapshots, IMU dashboard, microphone, depth map |
+| `raspbot_hailo_tracking` | Hailo-8 object detection (YOLOv5s person+face), gimbal person tracking, PID auto-follow with mecanum strafing, IMU feedback & obstacle avoidance, lost-target scanning, monocular depth estimation (FastDepth) |
 
 ## Quick start
 
 ```bash
-# Build
-colcon build --packages-select raspbot_hw raspbot_bringup raspbot_web_video raspbot_hailo_tracking
+# Build (include ydlidar if you have the T-mini Plus attached)
+colcon build --packages-select \
+  raspbot_hw raspbot_bringup raspbot_teleop \
+  raspbot_web_video raspbot_hailo_tracking \
+  ydlidar_ros2_driver
 
 # Full bringup (all features enabled by default)
 ros2 launch raspbot_bringup bringup.launch.py
@@ -26,7 +30,7 @@ Then open **http://\<pi-ip\>:8080/** in a browser.
 ## Auto-start on boot
 
 A systemd service launches the full bringup automatically when the Pi powers on.
-The OLED will display the IP address as soon as the network is ready.
+The OLED displays the IP address as soon as the network is ready.
 
 ```bash
 # Install the service (already done if you followed initial setup)
@@ -41,6 +45,10 @@ sudo systemctl restart raspbot        # restart
 sudo journalctl -u raspbot -f         # live logs
 ```
 
+The service runs as the `jedld` user with I2C, GPIO, video, dialout, and
+plugdev group access. It waits for network (up to 30 s) before launching so the
+OLED can display the IP, and depends on `hailort.service` for the Hailo-8.
+
 ## Launch arguments
 
 All arguments have sensible defaults and can be toggled individually:
@@ -49,7 +57,7 @@ All arguments have sensible defaults and can be toggled individually:
 # Disable specific subsystems
 ros2 launch raspbot_bringup bringup.launch.py enable_hailo:=false
 ros2 launch raspbot_bringup bringup.launch.py enable_web_video:=false
-ros2 launch raspbot_bringup bringup.launch.py enable_lightbar:=false
+ros2 launch raspbot_bringup bringup.launch.py enable_lidar:=false
 ros2 launch raspbot_bringup bringup.launch.py enable_front_camera:=false
 ros2 launch raspbot_bringup bringup.launch.py enable_imu:=false
 
@@ -67,15 +75,18 @@ ros2 launch raspbot_bringup bringup.launch.py \
 
 | Argument | Default | Description |
 |---|---|---|
-| `enable_motors` | `true` | Mecanum motor driver |
-| `enable_ultrasonic` | `true` | Ultrasonic range sensor |
+| `enable_motors` | `true` | Mecanum motor driver (PID heading-hold, failsafes) |
+| `enable_ultrasonic` | `true` | Ultrasonic range sensor (I2C or GPIO) |
 | `enable_gpio_sensors` | `true` | IR avoid + line tracking |
-| `enable_camera` | `true` | USB webcam |
-| `enable_front_camera` | `true` | Pi Camera Module 3 (CSI) |
-| `enable_gimbal` | `true` | 2DOF pan/tilt servos |
-| `enable_lightbar` | `true` | WS2812 RGB LED bar |
-| `enable_oled` | `true` | I2C OLED display |
-| `enable_imu` | `true` | Arduino IMU + audio bridge |
+| `enable_camera` | `true` | USB webcam (auto-detect) |
+| `enable_front_camera` | `true` | Pi Camera Module 3 (CSI, PDAF autofocus) |
+| `enable_gimbal` | `true` | 2DOF pan/tilt servos (IMU tilt compensation) |
+| `enable_lightbar` | `true` | WS2812 RGB LED bar (effects) |
+| `enable_oled` | `true` | I2C OLED display (IP, range, velocity) |
+| `enable_imu` | `true` | Arduino IMU bridge (LSM6DSOX + optional BNO055) |
+| `enable_bno055` | `false` | Standalone BNO055 9-DOF via Pico RP2040 bridge |
+| `enable_odometry` | `true` | Dead-reckoning odometry + path recording + return-to-origin |
+| `enable_lidar` | `true` | YDLidar T-mini Plus (360° laser scan) |
 | `enable_web_video` | `true` | Web UI (port 8080) |
 | `enable_hailo` | `true` | Hailo-8 detection + depth |
 | `play_startup_sound` | `true` | Play sound on boot |
@@ -84,6 +95,9 @@ ros2 launch raspbot_bringup bringup.launch.py \
 | `depth_hef_path` | `~/.local/share/raspbot/models/hailo8/fast_depth.hef` | Depth model (empty = disabled) |
 | `hailo_pan_sign` | `-1` | Gimbal pan direction |
 | `hailo_tilt_sign` | `-1` | Gimbal tilt direction |
+| `tracking_config_topic` | `tracking/config` | Detection config topic |
+| `follow_enable_topic` | `follow/enable` | Auto-follow enable topic |
+| `params_file` | (auto) | Path to `raspbot_hw.yaml` parameter file |
 
 </details>
 
@@ -94,16 +108,31 @@ ros2 launch raspbot_bringup bringup.launch.py \
 | Topic | Type | Source |
 |---|---|---|
 | `image_raw/compressed` | `CompressedImage` | USB webcam (auto-detected) |
-| `front_camera/compressed` | `CompressedImage` | Pi Camera Module 3 (IMX708) |
-| `ultrasonic/range` | `Range` | Ultrasonic distance |
+| `front_camera/compressed` | `CompressedImage` | Pi Camera Module 3 (IMX708, PDAF autofocus) |
+| `ultrasonic/range` | `Range` | Ultrasonic distance (I2C preferred, GPIO fallback) |
 | `ir_avoid/state` | `Int32` | IR obstacle (bit0=L, bit1=R) |
-| `tracking/state` | `Int32` | Line tracking (4-bit) |
-| `imu/data` | `Imu` | 6-axis accel+gyro (LSM6DSOX) |
-| `imu/yaw_deg` | `Float64` | Integrated yaw heading |
-| `imu/calibrated` | `Bool` | Gyro calibration status |
-| `imu/temperature` | `Float32` | IMU die temperature |
+| `tracking/state` | `Int32` | Line tracking (4-bit bitmask) |
+| `/scan` | `LaserScan` | YDLidar T-mini Plus (360°, 0.05–12 m, 10 Hz) |
+| `imu/data` | `Imu` | 6-axis accel+gyro (LSM6DSOX) or fused 9-DOF quaternion (BNO055) |
+| `imu/yaw_deg` | `Float64` | Yaw heading (gyro-integrated or magnetometer-stabilised) |
+| `imu/calibrated` | `Bool` | IMU calibration status |
+| `imu/calibration` | `String` | BNO055 calibration JSON: `{"sys":3,"gyro":3,"accel":2,"mag":1}` |
+| `imu/temperature` | `Float32` | IMU die temperature (°C) |
+| `imu/gravity` | `Vector3` | BNO055 gravity vector (body frame) |
+| `imu/mag` | `Vector3` | BNO055 raw magnetometer (µT) |
 | `imu/mic_level` | `Int32` | Microphone RMS level |
 | `imu/audio` | `UInt8MultiArray` | Audio PCM stream (8 kHz, 8-bit) |
+
+### Odometry & navigation
+
+| Topic | Type | Source |
+|---|---|---|
+| `odom` | `Odometry` | Dead-reckoned pose (cmd_vel + IMU yaw) |
+| `odom/path` | `Path` | Recorded waypoints (live during recording) |
+| `odom/recording` | `Bool` | True while path recording is active |
+| `odom/returning` | `Bool` | True while return-to-origin is in progress |
+| TF: `odom` → `base_link` | `TransformStamped` | Odometry transform |
+| TF: `base_link` → `laser_frame` | `TransformStamped` | Static LiDAR offset (0.05 m Z) |
 
 ### AI / Hailo-8
 
@@ -117,7 +146,7 @@ ros2 launch raspbot_bringup bringup.launch.py \
 
 | Topic | Type | Direction |
 |---|---|---|
-| `cmd_vel` | `Twist` | → motor driver |
+| `cmd_vel` | `Twist` | → motor driver (mecanum: x=fwd, y=strafe, z=yaw) |
 | `camera_gimbal/command_deg` | `Vector3` | → gimbal (x=pan, y=tilt) |
 | `lightbar/command` | `String` (JSON) | → WS2812 LED bar |
 | `tracking/enable` | `Bool` | → enable person tracking |
@@ -125,28 +154,85 @@ ros2 launch raspbot_bringup bringup.launch.py \
 | `follow/enable` | `Bool` | → enable auto-follow |
 | `follow/strafe_gain` | `Float64` | → tune strafe intensity |
 | `follow/gyro_damping` | `Float64` | → tune gyro damping |
-| `depth/enable` | `Bool` | → enable/disable depth |
+| `follow/target_area` | `Float64` | → target bbox area for follow distance |
+| `follow/max_linear` | `Float64` | → max forward speed during follow |
+| `collision_failsafe/enable` | `Bool` | → toggle collision failsafe |
+| `cliff_failsafe/enable` | `Bool` | → toggle cliff/edge failsafe |
+| `depth/enable` | `Bool` | → enable/disable depth estimation |
 | `imu/audio_enable` | `Bool` | → enable mic streaming |
 | `imu/calibrate` | `Empty` | → trigger gyro calibration |
+| `imu/save_cal` | `Empty` | → save BNO055 calibration to flash |
+| `imu/load_cal` | `Empty` | → load BNO055 calibration from flash |
+
+### Safety
+
+| Topic | Type | Direction |
+|---|---|---|
+| `collision_failsafe/active` | `Bool` | ← true when ultrasonic detects obstacle |
+| `cliff_failsafe/active` | `Bool` | ← true when IR sensors detect edge/cliff |
+
+### Services
+
+| Service | Type | Node | Description |
+|---|---|---|---|
+| `odom/set_origin` | `Trigger` | odometry | Reset pose to (0,0,0) |
+| `odom/start_recording` | `Trigger` | odometry | Begin recording waypoints |
+| `odom/stop_recording` | `Trigger` | odometry | Stop recording |
+| `odom/return_to_origin` | `Trigger` | odometry | Autonomously retrace path in reverse |
+| `odom/cancel_return` | `Trigger` | odometry | Abort return-to-origin |
+
+## Motor driver features
+
+The mecanum motor driver (`motor_driver` node) includes:
+
+- **Mecanum holonomic drive** — 4-wheel inverse kinematics (`linear.x`, `linear.y`, `angular.z`)
+- **PID heading-hold** — uses IMU yaw (BNO055 magnetometer-stabilised preferred) to correct drift when driving straight; full Kp/Ki/Kd with anti-windup
+- **Adaptive motor trim** — learns L/R asymmetry from sustained PID corrections, reducing correction load over time
+- **Per-motor manual trim** — `trim_fl`/`trim_fr`/`trim_rl`/`trim_rr` for known hardware bias
+- **Lateral drift correction** — accelerometer-based sideways drift compensation (mecanum-specific)
+- **Collision failsafe** — ultrasonic-based forward stop/slowdown zone (configurable distances, runtime toggle)
+- **Cliff failsafe** — IR line-tracker-based edge detection blocks forward motion (configurable sensor mask)
+- **Startup kick** — brief PWM boost to overcome static friction
+- **Strafe stabilisation** — correction deadband + PWM slew rate limiting during pure strafe
+- **Differential mode** — alternative 2-wheel drive mode (`drive_mode: "differential"`)
+
+All parameters are runtime-tunable via `ros2 param set`.
 
 ## Web UI features (port 8080)
 
 - **Live MJPEG streams**: rear camera (`/stream.mjpg`), front camera (`/stream_front.mjpg`), depth map (`/stream_depth.mjpg`)
 - **Gimbal control**: pan/tilt sliders with center button
-- **Drive (WASD)**: keyboard teleop with shift-for-speed, auto-stop on keyup
+- **Drive (WASD)**: keyboard teleop with Shift for speed, auto-stop on keyup/tab switch
 - **Detection overlay**: bounding boxes drawn on the live stream canvas
 - **Person tracking**: toggle gimbal tracking with pan/tilt invert options
-- **Auto-follow**: PID-based robot following with mecanum strafing, IMU gyro damping, heading hold, configurable target area & speed
+- **Auto-follow**: PID-based robot following with mecanum strafing, IMU gyro damping, heading hold, configurable target area & speed, lost-target scanning
+- **Collision failsafe**: toggle + live ultrasonic distance readout
+- **Cliff/edge failsafe**: toggle + per-sensor status display
 - **Light bar**: colour picker, per-LED control, breathing/rainbow/chase effects
 - **Snapshots**: capture full-resolution stills to `~/Pictures/raspbot/`
-- **IMU dashboard**: live accelerometer/gyroscope, 3D orientation cube, yaw heading, temperature
+- **Odometry & navigation**: canvas path visualisation, X/Y/yaw readouts, distance/speed, record/stop/return-to-origin/cancel controls
+- **LiDAR scan**: live 360° point cloud canvas with zoom, range/FOV/point count readouts
+- **IMU dashboard**: live accelerometer/gyroscope, 3D orientation cube, yaw heading, calibration status, temperature
 - **Microphone**: browser audio playback from Arduino PDM mic (8 kHz)
 - **Depth map**: toggleable Hailo-8 monocular depth visualization with TURBO colormap
+
+## Terminal teleop
+
+The `raspbot_teleop` package provides terminal-based control (useful over SSH):
+
+```bash
+# Keyboard drive (WASD + J/L for strafe)
+ros2 launch raspbot_teleop keyboard_teleop.launch.py
+
+# Gimbal control (arrow keys / H/J/K/L)
+ros2 launch raspbot_teleop gimbal_teleop.launch.py
+```
 
 ## Arduino firmware
 
 The Arduino Nano RP2040 Connect provides the IMU (LSM6DSOX) and PDM microphone
-over USB serial at 115200 baud. The firmware and a flash script are in
+over USB serial at 115200 baud. When a BNO055 is wired to A4/A5, it also
+streams fused 9-DOF orientation data. The firmware is in
 `firmware/arduino_nano_rp2040/`.
 
 ```bash
@@ -156,8 +242,25 @@ cd firmware/arduino_nano_rp2040
 ```
 
 See `firmware/arduino_nano_rp2040/README.md` for the full serial protocol
-(`$IMU`, `$AUD`, `$CAL`, `$INFO`, `$ERR` output lines; `?`, `C`, `A`/`a`,
-`R`/`G`/`B`/`W`/`O` input commands).
+(`$IMU`, `$BNO`, `$GRV`, `$AUD`, `$CAL`, `$INFO`, `$ERR` output lines;
+`?`, `C`, `A`/`a`, `S`, `L`, `R`/`G`/`B`/`W`/`O`, `1`/`2`/`3` input commands).
+
+## BNO055 9-DOF IMU (Pico RP2040 bridge)
+
+An optional Raspberry Pi Pico (RP2040) bridges a BNO055 9-DOF absolute
+orientation sensor over USB serial. This provides drift-free magnetometer-
+stabilised heading, fused quaternion orientation, and gravity-compensated
+linear acceleration — significantly improving heading-hold, odometry, and
+tilt compensation.
+
+```bash
+# Build & flash
+cd firmware/pico_rp2040_bno055
+./build_and_flash_pico.sh
+```
+
+See `firmware/pico_rp2040_bno055/WIRING.md` for the I2C wiring diagram
+(GP4=SDA, GP5=SCL). Enable with `enable_bno055:=true` in the launch file.
 
 ## M5Stack Cardputer controller
 
@@ -183,7 +286,7 @@ Both models run on a single Hailo-8 device (shared `VDevice` in one process):
 | Model | HEF | Input | Output | Throughput (Hailo-8) |
 |---|---|---|---|---|
 | YOLOv5s person+face | `yolov5s_personface.hef` (14 MB) | 640×640×3 | NMS detections (2 classes) | ~100 FPS |
-| fast_depth | `fast_depth.hef` (3.1 MB) | 224×224×3 | 224×224×1 depth map | ~2500 FPS |
+| FastDepth | `fast_depth.hef` (3.1 MB) | 224×224×3 | 224×224×1 depth map | ~2500 FPS |
 
 Models are stored in `~/.local/share/raspbot/models/hailo8/`. Use the download
 script to fetch them:
@@ -192,12 +295,22 @@ script to fetch them:
 ros2 run raspbot_hailo_tracking download_hailo_model
 ```
 
+## Utilities
+
+```bash
+# Identify which motor ID maps to which physical wheel
+ros2 run raspbot_hw motor_id_test
+```
+
 ## Hardware notes
 
 See `HARDWARE.md` for a consolidated hardware reference including:
 
 - Pin mapping (BOARD numbering)
 - I2C controller register map
+- BNO055 wiring & calibration
+- LiDAR configuration
+- Full parameter reference (~175+ tunable parameters)
 - Pi Camera Module 3 (IMX708) setup
 - Hailo-8 PCIe accelerator
 - Arduino Nano RP2040 Connect wiring

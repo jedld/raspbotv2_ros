@@ -1,13 +1,16 @@
 import os
+import logging
 
-from ament_index_python.packages import get_package_share_directory
+from ament_index_python.packages import get_package_share_directory, PackageNotFoundError
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, LogInfo
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.substitutions import FindPackageShare
 from launch.substitutions import PathJoinSubstitution
 from launch_ros.actions import Node
+
+_logger = logging.getLogger(__name__)
 
 
 def generate_launch_description():
@@ -31,7 +34,7 @@ def generate_launch_description():
         'raspbot_hw.yaml',
     ])
 
-    return LaunchDescription([
+    ld = LaunchDescription([
         DeclareLaunchArgument('enable_motors', default_value='true'),
         DeclareLaunchArgument('enable_ultrasonic', default_value='true'),
         DeclareLaunchArgument('enable_gpio_sensors', default_value='true'),
@@ -141,24 +144,35 @@ def generate_launch_description():
             condition=IfCondition(enable_odometry),
         ),
 
-        # ── YDLidar T-mini Plus ──────────────────────────────────────
-        Node(
+    ])
+
+    # ── YDLidar T-mini Plus (optional – package may not be installed) ─
+    try:
+        ydlidar_params = os.path.join(
+            get_package_share_directory('ydlidar_ros2_driver'),
+            'params', 'tmini_plus.yaml')
+        ld.add_action(Node(
             package='ydlidar_ros2_driver',
             executable='ydlidar_ros2_driver_node',
             name='ydlidar_ros2_driver_node',
             output='screen',
             emulate_tty=True,
-            parameters=[os.path.join(
-                get_package_share_directory('ydlidar_ros2_driver'),
-                'params', 'tmini_plus.yaml')],
+            parameters=[ydlidar_params],
             condition=IfCondition(enable_lidar),
-        ),
-        Node(
+        ))
+        ld.add_action(Node(
             package='tf2_ros',
             executable='static_transform_publisher',
             name='static_tf_pub_laser',
             arguments=['0', '0', '0.05', '0', '0', '0', '1',
                        'base_link', 'laser_frame'],
             condition=IfCondition(enable_lidar),
-        ),
-    ])
+        ))
+    except PackageNotFoundError:
+        _logger.warning(
+            'ydlidar_ros2_driver package not found – lidar nodes will be skipped. '
+            'Build with: colcon build --packages-select ydlidar_ros2_driver')
+        ld.add_action(LogInfo(
+            msg='[hw.launch] ydlidar_ros2_driver not installed – lidar disabled'))
+
+    return ld
