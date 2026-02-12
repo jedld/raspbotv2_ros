@@ -1,3 +1,6 @@
+import os
+
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
@@ -19,6 +22,7 @@ def generate_launch_description():
     enable_bno055 = LaunchConfiguration('enable_bno055')
     enable_front_camera = LaunchConfiguration('enable_front_camera')
     enable_odometry = LaunchConfiguration('enable_odometry')
+    enable_lidar = LaunchConfiguration('enable_lidar')
     params_file = LaunchConfiguration('params_file')
 
     default_params_file = PathJoinSubstitution([
@@ -39,6 +43,7 @@ def generate_launch_description():
         DeclareLaunchArgument('enable_bno055', default_value='false'),
         DeclareLaunchArgument('enable_front_camera', default_value='false'),
         DeclareLaunchArgument('enable_odometry', default_value='true'),
+        DeclareLaunchArgument('enable_lidar', default_value='true'),
         DeclareLaunchArgument('params_file', default_value=default_params_file),
 
         Node(
@@ -134,5 +139,26 @@ def generate_launch_description():
             output='screen',
             parameters=[params_file],
             condition=IfCondition(enable_odometry),
+        ),
+
+        # ── YDLidar T-mini Plus ──────────────────────────────────────
+        Node(
+            package='ydlidar_ros2_driver',
+            executable='ydlidar_ros2_driver_node',
+            name='ydlidar_ros2_driver_node',
+            output='screen',
+            emulate_tty=True,
+            parameters=[os.path.join(
+                get_package_share_directory('ydlidar_ros2_driver'),
+                'params', 'tmini_plus.yaml')],
+            condition=IfCondition(enable_lidar),
+        ),
+        Node(
+            package='tf2_ros',
+            executable='static_transform_publisher',
+            name='static_tf_pub_laser',
+            arguments=['0', '0', '0.05', '0', '0', '0', '1',
+                       'base_link', 'laser_frame'],
+            condition=IfCondition(enable_lidar),
         ),
     ])

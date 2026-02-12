@@ -30,6 +30,7 @@ def generate_launch_description():
     tracking_config_topic = LaunchConfiguration('tracking_config_topic')
     follow_enable_topic = LaunchConfiguration('follow_enable_topic')
     depth_hef_path = LaunchConfiguration('depth_hef_path')
+    enable_lidar = LaunchConfiguration('enable_lidar')
     params_file = LaunchConfiguration('params_file')
 
     default_params_file = PathJoinSubstitution([
@@ -79,6 +80,7 @@ def generate_launch_description():
         DeclareLaunchArgument('follow_enable_topic', default_value='follow/enable'),
         DeclareLaunchArgument('depth_hef_path', default_value=
             os.path.expanduser('~/.local/share/raspbot/models/hailo8/fast_depth.hef')),
+        DeclareLaunchArgument('enable_lidar', default_value='true'),
         DeclareLaunchArgument('params_file', default_value=default_params_file),
 
         IncludeLaunchDescription(
@@ -93,6 +95,7 @@ def generate_launch_description():
                 'enable_oled': enable_oled,
                 'enable_imu': enable_imu,
                 'enable_front_camera': enable_front_camera,
+                'enable_lidar': enable_lidar,
                 'params_file': params_file,
             }.items(),
         ),

@@ -16,7 +16,7 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from geometry_msgs.msg import Vector3, Twist
 from nav_msgs.msg import Odometry, Path
-from sensor_msgs.msg import CompressedImage, Imu, Range
+from sensor_msgs.msg import CompressedImage, Imu, LaserScan, Range
 from std_msgs.msg import Bool, Empty, Float32, Float64, Int32, Int32MultiArray, String, UInt8MultiArray
 from std_srvs.srv import Trigger
 
@@ -256,6 +256,29 @@ INDEX_HTML = """<!doctype html>
                     </div>
                     <div class=\"kv\" style=\"margin-top:3px;font-size:11px;color:#888;\">
                         Waypoints: <span id=\"odomWpCount\">0</span> &nbsp;|&nbsp; Trail: <span id=\"odomTrailCount\">0</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class=\"card\" id=\"lidarCard\">
+            <h2>&#128752; LiDAR Scan</h2>
+            <p class=\"muted\">Live 360° point cloud from YDLidar T-mini Plus on <code>/scan</code>. Top-down view: forward = up.</p>
+            <div style=\"display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start;\">
+                <div style=\"flex:0 0 auto;text-align:center;\">
+                    <canvas id=\"lidarCanvas\" width=\"400\" height=\"400\" style=\"display:block;border:1px solid #ddd;border-radius:8px;background:#111;\"></canvas>
+                    <div class=\"kv\" style=\"margin-top:4px;font-size:11px;\"><span style=\"color:#0f0;\">&#9632;</span> points &nbsp; <span style=\"color:#e00;\">&#9632;</span> robot &nbsp; rings = range</div>
+                </div>
+                <div style=\"flex:1 1 200px;\">
+                    <table style=\"width:100%;border-collapse:collapse;font-size:13px;font-family:ui-monospace,monospace;\">
+                        <tr><td style=\"padding:3px 6px;color:#666;\">Points</td><td id=\"lidarPoints\" style=\"padding:3px 6px;font-weight:bold;\">0</td></tr>
+                        <tr><td style=\"padding:3px 6px;color:#666;\">Range</td><td id=\"lidarRange\" style=\"padding:3px 6px;\">— m</td></tr>
+                        <tr><td style=\"padding:3px 6px;color:#666;\">FOV</td><td id=\"lidarFov\" style=\"padding:3px 6px;\">—°</td></tr>
+                        <tr><td style=\"padding:3px 6px;color:#666;\">Status</td><td id=\"lidarStatus\" style=\"padding:3px 6px;color:#888;\">waiting…</td></tr>
+                    </table>
+                    <div style=\"margin-top:10px;\">
+                        <label for=\"lidarZoom\">Zoom: <span id=\"lidarZoomVal\">auto</span></label>
+                        <input id=\"lidarZoom\" type=\"range\" min=\"0\" max=\"12\" step=\"0.5\" value=\"0\" style=\"width:100%;\" />
                     </div>
                 </div>
             </div>
@@ -1922,6 +1945,168 @@ INDEX_HTML = """<!doctype html>
         });
 
         // ──────────────────────────────────────────────────────────────
+        // LiDAR Scan Visualisation
+        // ──────────────────────────────────────────────────────────────
+        const lidarCanvas = document.getElementById('lidarCanvas');
+        const lidarCtx = lidarCanvas.getContext('2d');
+        const lidarPointsEl = document.getElementById('lidarPoints');
+        const lidarRangeEl = document.getElementById('lidarRange');
+        const lidarFovEl = document.getElementById('lidarFov');
+        const lidarStatusEl = document.getElementById('lidarStatus');
+        const lidarZoomSlider = document.getElementById('lidarZoom');
+        const lidarZoomVal = document.getElementById('lidarZoomVal');
+        let lidarManualRange = 0; // 0 = auto
+
+        lidarZoomSlider.addEventListener('input', () => {
+            lidarManualRange = parseFloat(lidarZoomSlider.value);
+            lidarZoomVal.textContent = lidarManualRange > 0 ? lidarManualRange.toFixed(1) + ' m' : 'auto';
+        });
+
+        function drawLidarScan(data) {
+            const W = lidarCanvas.width, H = lidarCanvas.height;
+            const cx = W / 2, cy = H / 2;
+            lidarCtx.clearRect(0, 0, W, H);
+            lidarCtx.fillStyle = '#111';
+            lidarCtx.fillRect(0, 0, W, H);
+
+            const angles = data.angles || [];
+            const ranges = data.ranges || [];
+            const rangeMin = data.range_min || 0.05;
+            const rangeMax = data.range_max || 12.0;
+            const nPts = Math.min(angles.length, ranges.length);
+
+            // Determine display range (max visible distance)
+            let maxR = 1.0;
+            if (lidarManualRange > 0) {
+                maxR = lidarManualRange;
+            } else {
+                // Auto: find the 95th-percentile valid range for a nice view
+                const valid = [];
+                for (let i = 0; i < nPts; i++) {
+                    const r = ranges[i];
+                    if (r >= rangeMin && r <= rangeMax) valid.push(r);
+                }
+                if (valid.length > 0) {
+                    valid.sort((a, b) => a - b);
+                    maxR = valid[Math.floor(valid.length * 0.95)] * 1.15;
+                    if (maxR < 0.5) maxR = 0.5;
+                }
+            }
+            const scale = (Math.min(W, H) / 2 - 20) / maxR;
+
+            // Coordinate transform: LiDAR frame → canvas
+            // +X (forward) = up on canvas, angles CCW from +X
+            function toCanvas(dist, angleRad) {
+                const lx = dist * Math.cos(angleRad);
+                const ly = dist * Math.sin(angleRad);
+                return [cx - ly * scale, cy - lx * scale];
+            }
+
+            // Range rings
+            let ringStep = 1.0;
+            if (maxR <= 2) ringStep = 0.5;
+            else if (maxR <= 5) ringStep = 1.0;
+            else if (maxR <= 10) ringStep = 2.0;
+            else ringStep = 3.0;
+
+            lidarCtx.strokeStyle = 'rgba(255,255,255,0.1)';
+            lidarCtx.lineWidth = 0.5;
+            lidarCtx.font = '10px ui-monospace, monospace';
+            lidarCtx.fillStyle = 'rgba(255,255,255,0.3)';
+            lidarCtx.textAlign = 'left';
+            for (let r = ringStep; r <= maxR; r += ringStep) {
+                const rPx = r * scale;
+                lidarCtx.beginPath();
+                lidarCtx.arc(cx, cy, rPx, 0, 2 * Math.PI);
+                lidarCtx.stroke();
+                lidarCtx.fillText(r.toFixed(1) + 'm', cx + 3, cy - rPx + 12);
+            }
+
+            // Cross-hair axes
+            lidarCtx.strokeStyle = 'rgba(255,255,255,0.15)';
+            lidarCtx.lineWidth = 0.5;
+            lidarCtx.beginPath(); lidarCtx.moveTo(cx, 0); lidarCtx.lineTo(cx, H); lidarCtx.stroke();
+            lidarCtx.beginPath(); lidarCtx.moveTo(0, cy); lidarCtx.lineTo(W, cy); lidarCtx.stroke();
+
+            // Cardinal labels
+            lidarCtx.fillStyle = 'rgba(255,255,255,0.4)';
+            lidarCtx.font = '11px ui-monospace, monospace';
+            lidarCtx.textAlign = 'center';
+            lidarCtx.fillText('FWD', cx, 14);
+            lidarCtx.fillText('BACK', cx, H - 6);
+            lidarCtx.textAlign = 'right';
+            lidarCtx.fillText('RIGHT', W - 6, cy - 4);
+            lidarCtx.textAlign = 'left';
+            lidarCtx.fillText('LEFT', 6, cy - 4);
+
+            // Draw scan points with distance-based colouring
+            for (let i = 0; i < nPts; i++) {
+                const r = ranges[i];
+                if (r < rangeMin || r > rangeMax) continue;
+                const a = angles[i];
+                const [px, py] = toCanvas(r, a);
+                // Colour: green (close) → yellow → red (far)
+                const t = Math.min(1.0, r / maxR);
+                const red = Math.floor(255 * t);
+                const grn = Math.floor(255 * (1 - t * 0.5));
+                lidarCtx.fillStyle = 'rgb(' + red + ',' + grn + ',0)';
+                lidarCtx.fillRect(px - 1.5, py - 1.5, 3, 3);
+            }
+
+            // Robot marker at centre (red circle with heading line)
+            lidarCtx.beginPath();
+            lidarCtx.arc(cx, cy, 5, 0, 2 * Math.PI);
+            lidarCtx.fillStyle = '#e00';
+            lidarCtx.fill();
+            lidarCtx.strokeStyle = '#e00';
+            lidarCtx.lineWidth = 2;
+            lidarCtx.beginPath();
+            lidarCtx.moveTo(cx, cy);
+            lidarCtx.lineTo(cx, cy - 14);  // forward arrow up
+            lidarCtx.stroke();
+            // Arrowhead
+            lidarCtx.beginPath();
+            lidarCtx.moveTo(cx, cy - 14);
+            lidarCtx.lineTo(cx - 4, cy - 9);
+            lidarCtx.moveTo(cx, cy - 14);
+            lidarCtx.lineTo(cx + 4, cy - 9);
+            lidarCtx.stroke();
+        }
+
+        function updateLidarUI(d) {
+            const nPts = (d.angles || []).length;
+            lidarPointsEl.textContent = String(nPts);
+            if (d.range_max != null) {
+                lidarRangeEl.textContent = (d.range_min || 0).toFixed(2) + ' – ' + d.range_max.toFixed(1) + ' m';
+            }
+            if (d.angle_min != null && d.angle_max != null) {
+                const fov = ((d.angle_max - d.angle_min) * 180 / Math.PI).toFixed(0);
+                lidarFovEl.textContent = fov + '°';
+            }
+            if (d.last_age_s != null && d.last_age_s < 2) {
+                lidarStatusEl.textContent = 'active (' + nPts + ' pts)';
+                lidarStatusEl.style.color = '#0f0';
+            } else {
+                lidarStatusEl.textContent = 'waiting for data…';
+                lidarStatusEl.style.color = '#888';
+            }
+            drawLidarScan(d);
+        }
+
+        async function fetchLidar() {
+            try {
+                const r = await fetch('/api/lidar', {cache: 'no-store'});
+                if (!r.ok) return;
+                const d = await r.json();
+                updateLidarUI(d);
+            } catch(e) {}
+        }
+
+        // Poll lidar at 5 Hz
+        setInterval(fetchLidar, 200);
+        fetchLidar();
+
+        // ──────────────────────────────────────────────────────────────
         // Depth Map (Hailo-8 fast_depth)
         // ──────────────────────────────────────────────────────────────
         const depthToggleBtn = document.getElementById('depthToggleBtn');
@@ -2188,10 +2373,13 @@ class WebVideoNode(Node):
         self.declare_parameter("imu_temperature_topic", "imu/temperature")
         self.declare_parameter("imu_mic_topic", "imu/mic_level")
         # Rotate-to-angle controller params
-        self.declare_parameter("rotate_kp", 1.8)       # proportional gain
-        self.declare_parameter("rotate_kd", 0.3)       # derivative gain (damping via gyro yaw rate)
+        self.declare_parameter("rotate_kp", 1.0)       # proportional gain
+        self.declare_parameter("rotate_ki", 0.3)       # integral gain (overcomes friction near target)
+        self.declare_parameter("rotate_kd", 1.2)       # derivative gain (strong braking via gyro yaw rate)
+        self.declare_parameter("rotate_ramp_deg", 30.0) # error angle at which output reaches max speed
         self.declare_parameter("rotate_tolerance_deg", 2.0)
         self.declare_parameter("rotate_settle_sec", 0.5)
+        self.declare_parameter("rotate_integral_max", 15.0)  # anti-windup cap (deg·s)
 
         imu_data_topic = str(self.get_parameter("imu_data_topic").value)
         imu_yaw_topic = str(self.get_parameter("imu_yaw_topic").value)
@@ -2216,10 +2404,17 @@ class WebVideoNode(Node):
         self._rotate_target_deg = None
         self._rotate_speed = 0.5
         self._rotate_kp = float(self.get_parameter("rotate_kp").value)
+        self._rotate_ki = float(self.get_parameter("rotate_ki").value)
         self._rotate_kd = float(self.get_parameter("rotate_kd").value)
+        self._rotate_ramp_deg = float(self.get_parameter("rotate_ramp_deg").value)
         self._rotate_tolerance = float(self.get_parameter("rotate_tolerance_deg").value)
         self._rotate_settle_sec = float(self.get_parameter("rotate_settle_sec").value)
+        self._rotate_integral_max = float(self.get_parameter("rotate_integral_max").value)
         self._rotate_in_tolerance_since = None
+        self._rotate_integral = 0.0
+        self._rotate_prev_error = None
+        self._rotate_last_time = 0.0
+        self._rotate_last_output = 0.0
 
         self._imu_sub = self.create_subscription(Imu, imu_data_topic, self._on_imu_data, 10)
         self._imu_yaw_sub = self.create_subscription(Float64, imu_yaw_topic, self._on_imu_yaw, 10)
@@ -2397,6 +2592,23 @@ class WebVideoNode(Node):
             f"Odometry topics: odom={odom_topic}, path={odom_path_topic}, "
             f"recording={odom_recording_topic}, returning={odom_returning_topic}"
         )
+
+        # ── LiDAR scan integration ────────────────────────────────────
+        self.declare_parameter("scan_topic", "scan")
+        scan_topic = str(self.get_parameter("scan_topic").value)
+
+        self._scan_angles: list = []     # angle for each ray (radians)
+        self._scan_ranges: list = []     # range for each ray (metres)
+        self._scan_angle_min = 0.0
+        self._scan_angle_max = 0.0
+        self._scan_range_min = 0.0
+        self._scan_range_max = 12.0
+        self._scan_last_monotonic = 0.0
+
+        self._scan_sub = self.create_subscription(
+            LaserScan, scan_topic, self._on_scan, qos_profile_sensor_data
+        )
+        self.get_logger().info(f"LiDAR scan topic: {scan_topic}")
 
     @staticmethod
     def _clamp(x: float, lo: float, hi: float) -> float:
@@ -3165,6 +3377,37 @@ class WebVideoNode(Node):
     def odom_cancel_return(self) -> dict:
         return self._call_trigger_service(self._odom_cancel_return_cli, 'odom/cancel_return')
 
+    # ── LiDAR scan integration ────────────────────────────────────
+
+    def _on_scan(self, msg: LaserScan) -> None:
+        n = len(msg.ranges)
+        angles = [msg.angle_min + i * msg.angle_increment for i in range(n)]
+        self._scan_angles = angles
+        self._scan_ranges = list(msg.ranges)
+        self._scan_angle_min = msg.angle_min
+        self._scan_angle_max = msg.angle_max
+        self._scan_range_min = msg.range_min
+        self._scan_range_max = msg.range_max
+        self._scan_last_monotonic = time.monotonic()
+
+    def get_scan_dict(self) -> dict:
+        now = time.monotonic()
+        age = None
+        if self._scan_last_monotonic > 0.0:
+            age = round(max(0.0, now - self._scan_last_monotonic), 3)
+        # Round values to reduce JSON payload size (~430 points per scan)
+        angles = [round(a, 4) for a in self._scan_angles]
+        ranges = [round(r, 4) for r in self._scan_ranges]
+        return {
+            'angles': angles,
+            'ranges': ranges,
+            'angle_min': round(self._scan_angle_min, 4),
+            'angle_max': round(self._scan_angle_max, 4),
+            'range_min': round(self._scan_range_min, 4),
+            'range_max': round(self._scan_range_max, 4),
+            'last_age_s': age,
+        }
+
     # ── Rotate-to-angle controller ────────────────────────────────────
 
     def start_rotate(self, target_deg: float, speed: float = 0.5) -> None:
@@ -3174,12 +3417,19 @@ class WebVideoNode(Node):
         self._rotate_speed = speed
         self._rotate_active = True
         self._rotate_in_tolerance_since = None
+        self._rotate_integral = 0.0
+        self._rotate_prev_error = None
+        self._rotate_last_time = time.monotonic()
+        self._rotate_last_output = 0.0
         self.get_logger().info(f"Rotate to {target_deg:.1f}° at speed {speed:.1f}")
 
     def stop_rotate(self) -> None:
         self._rotate_active = False
         self._rotate_target_deg = None
         self._rotate_in_tolerance_since = None
+        self._rotate_integral = 0.0
+        self._rotate_prev_error = None
+        self._rotate_last_output = 0.0
         # Send a stop command
         msg = Twist()
         self._cmd_pub.publish(msg)
@@ -3201,6 +3451,9 @@ class WebVideoNode(Node):
             error += 360.0
 
         now = time.monotonic()
+        dt = now - self._rotate_last_time if self._rotate_last_time > 0 else 0.05
+        dt = min(dt, 0.1)  # safety cap
+        self._rotate_last_time = now
 
         # Check if within tolerance
         if abs(error) < self._rotate_tolerance:
@@ -3212,37 +3465,62 @@ class WebVideoNode(Node):
                     f"Rotation complete: target={target:.1f}°, current={current:.1f}°, error={error:.1f}°"
                 )
                 self._rotate_active = False
+                self._rotate_integral = 0.0
+                self._rotate_last_output = 0.0
                 msg = Twist()
                 self._cmd_pub.publish(msg)
                 return
         else:
             self._rotate_in_tolerance_since = None
 
-        # PD controller: use gyro yaw-rate (°/s) as derivative for damping
-        yaw_rate = self._imu_gyro[2]  # °/s from IMU (already converted)
+        # ── PID controller ────────────────────────────────────────
+        yaw_rate = self._imu_gyro[2]  # °/s from IMU
+        ramp = max(self._rotate_ramp_deg, 1.0)
 
-        p_term = self._rotate_kp * error           # proportional
-        d_term = -self._rotate_kd * yaw_rate        # derivative (damping)
-        raw_cmd = p_term + d_term
+        # P: proportional to heading error
+        p_term = self._rotate_kp * error
 
-        # Normalize to ±1 range and clamp to requested speed
-        angular_unit = raw_cmd / 180.0
-        angular_unit = max(-self._rotate_speed, min(self._rotate_speed, angular_unit))
+        # I: only accumulate near the target to overcome friction
+        #    during final settling — prevents integral windup during
+        #    the high-speed slew phase.
+        near_target = abs(error) < self._rotate_tolerance * 3.0  # within ~6°
+        if near_target:
+            self._rotate_integral += error * dt
+            self._rotate_integral = max(-self._rotate_integral_max,
+                                         min(self._rotate_integral_max,
+                                             self._rotate_integral))
+        elif abs(error) > self._rotate_tolerance * 6.0:
+            # Far from target: reset integral to prevent stale buildup
+            self._rotate_integral = 0.0
+        # Reduce integral on zero-crossing to cut overshoot
+        if (self._rotate_prev_error is not None
+                and error * self._rotate_prev_error < 0):
+            self._rotate_integral *= 0.25
+        self._rotate_prev_error = error
+        i_term = self._rotate_ki * self._rotate_integral
 
-        # Gentle minimum nudge only when far from target and nearly stalled
-        min_unit = 0.08
-        if abs(error) > self._rotate_tolerance * 2.0 and abs(angular_unit) < min_unit:
-            angular_unit = min_unit if error > 0 else -min_unit
+        # D: strong gyro-rate braking (prevents overshoot / oscillation)
+        d_term = -self._rotate_kd * yaw_rate
 
-        # Dead-zone: if error is small and output is tiny, just stop
-        if abs(error) < self._rotate_tolerance * 1.5 and abs(angular_unit) < min_unit:
-            angular_unit = 0.0
+        raw = p_term + i_term + d_term
+
+        # Normalize: output reaches ±1.0 at ±ramp_deg of error
+        angular_unit = raw / ramp
+
+        # Clamp to requested speed
+        angular_unit = max(-self._rotate_speed,
+                           min(self._rotate_speed, angular_unit))
+
+        # No smoothing — direct PD/PID output is needed so braking
+        # commands take effect immediately (smoothing caused massive
+        # overshoot by delaying deceleration).
+        self._rotate_last_output = angular_unit
 
         msg = Twist()
         msg.angular.z = float(angular_unit) * float(self._max_angular_rps)
         self._cmd_pub.publish(msg)
-        self._cmd_last_rx_monotonic = time.monotonic()
-        self._cmd_last_sent_monotonic = self._cmd_last_rx_monotonic
+        self._cmd_last_rx_monotonic = now
+        self._cmd_last_sent_monotonic = now
 
 
 def make_handler(
@@ -3286,6 +3564,7 @@ def make_handler(
     odom_stop_recording=None,
     odom_return_to_origin=None,
     odom_cancel_return=None,
+    scan_provider=None,
 ):
     boundary = b"--frame"
     fps = max(float(fps_limit), 1.0)
@@ -3435,6 +3714,26 @@ def make_handler(
                         payload = odom_provider()
                     except Exception:
                         payload = {'error': 'odom_provider_failed'}
+                body = (json.dumps(payload) + "\n").encode("utf-8")
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-cache")
+                self.end_headers()
+                self.wfile.write(body)
+                try:
+                    self.wfile.flush()
+                except Exception:
+                    pass
+                return
+
+            if path == "/api/lidar":
+                payload = {}
+                if callable(scan_provider):
+                    try:
+                        payload = scan_provider()
+                    except Exception:
+                        payload = {'error': 'scan_provider_failed'}
                 body = (json.dumps(payload) + "\n").encode("utf-8")
                 self.send_response(HTTPStatus.OK)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -4355,6 +4654,7 @@ def main() -> None:
         odom_stop_recording=node.odom_stop_recording,
         odom_return_to_origin=node.odom_return_to_origin,
         odom_cancel_return=node.odom_cancel_return,
+        scan_provider=node.get_scan_dict,
     )
     httpd = ThreadingHTTPServer((bind, port), handler_cls)
     # Allow the serve loop to wake up periodically so Ctrl-C / rclpy shutdown is responsive.
