@@ -100,6 +100,14 @@ motor_driver:
     collision_ultrasonic_topic: "ultrasonic/range"
     collision_failsafe_timeout_sec: 1.0  # ignore stale data after this long
 
+    # ── LiDAR front-zone collision integration ───────────────────────
+    # Complements the ultrasonic failsafe with 360° LiDAR data.
+    # The motor driver uses min(ultrasonic, lidar_front) for the effective
+    # collision distance, giving broader coverage.
+    lidar_front_range_topic: "lidar/front_range"
+    lidar_collision_enable: true
+    lidar_collision_timeout_sec: 1.0
+
     # ── Cliff failsafe (line-tracker IR sensors) ─────────────────────
     # Blocks forward motion when any line-tracker sensor detects "no floor"
     # (i.e. an edge, cliff, or stair drop).  Enabled by default.
@@ -341,3 +349,75 @@ odometry:
     return_goal_tolerance_rad: 0.15  # ~8.6 deg final heading tolerance
     return_timeout_sec: 120.0        # abort return after this long
     return_cmd_vel_topic: "cmd_vel"
+
+# ── LiDAR SLAM (occupancy grid mapping) ───────────────────────────
+lidar_slam:
+  ros__parameters:
+    # Grid dimensions: 200×200 cells at 0.05m = 10m × 10m map area.
+    # Origin at (−5, −5) centres the map on the robot's starting position.
+    slam_resolution: 0.05          # metres per cell
+    slam_width: 200                # cells
+    slam_height: 200               # cells
+    slam_origin_x: -5.0            # map origin X (metres)
+    slam_origin_y: -5.0            # map origin Y (metres)
+
+    # Update rates (keep low to save CPU on Pi 5)
+    slam_update_hz: 2.0            # grid update rate (processes scans)
+    slam_map_publish_hz: 1.0       # OccupancyGrid publish rate
+    slam_tf_publish_hz: 10.0       # map→odom TF publish rate
+
+    # Log-odds parameters for Bayesian occupancy update
+    slam_log_odds_occ: 0.85        # evidence for occupied  (+)
+    slam_log_odds_free: -0.40      # evidence for free      (−)
+    slam_log_odds_max: 5.0         # saturation ceiling
+    slam_log_odds_min: -2.0        # saturation floor
+    slam_unknown_threshold: 0.15   # |log_odds| < this → unknown cell
+
+    # Scan processing
+    slam_min_range: 0.10           # ignore points closer than this (m)
+    slam_max_range: 8.0            # ignore points farther than this (m)
+    slam_scan_downsample: 3        # use every Nth scan point (1 = all)
+
+    # Correlative scan-to-map matching (disabled by default — CPU intensive)
+    # When enabled, the SLAM node refines the odometry pose by searching a
+    # small window around the predicted position for the best scan match.
+    # The correction is published as map→odom TF.
+    slam_scan_match_enable: false
+    slam_scan_match_min_scans: 20       # warmup before matching begins
+    slam_scan_match_search_xy: 0.05     # ±m search window
+    slam_scan_match_search_yaw: 0.035   # ±rad (~2°) search window
+    slam_scan_match_step_xy: 0.01       # m step in search grid
+    slam_scan_match_step_yaw: 0.005     # rad step (~0.3°)
+    slam_scan_match_max_correction_xy: 0.02   # max correction per update (m)
+    slam_scan_match_max_correction_yaw: 0.01  # max correction per update (rad)
+
+    # Topics & frames
+    scan_topic: "scan"
+    odom_topic: "odom"
+    map_topic: "map"
+    map_frame_id: "map"
+    odom_frame_id: "odom"
+
+# ── LiDAR obstacle avoidance ──────────────────────────────────────
+lidar_obstacle:
+  ros__parameters:
+    scan_topic: "scan"
+    publish_hz: 10.0
+
+    # Zone angular definitions (degrees from forward)
+    front_half_angle_deg: 30.0      # front zone: ±30° from forward
+    side_angle_start_deg: 30.0      # side zones: 30°–150°
+    side_angle_end_deg: 150.0
+
+    # Distance thresholds (metres)
+    front_stop_distance: 0.20       # hard stop when front obstacle closer than this
+    front_slow_distance: 0.50       # begin slow-down when closer than this
+    side_stop_distance: 0.15        # hard stop for lateral movement
+    side_slow_distance: 0.30        # begin lateral slow-down
+    rear_stop_distance: 0.15        # hard stop for backward movement
+    rear_slow_distance: 0.30        # begin backward slow-down
+
+    # Range message parameters
+    min_range: 0.05
+    max_range: 12.0
+    frame_id: "laser_frame"

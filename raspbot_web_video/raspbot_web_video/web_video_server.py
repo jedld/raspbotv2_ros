@@ -15,7 +15,7 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from geometry_msgs.msg import Vector3, Twist
-from nav_msgs.msg import Odometry, Path
+from nav_msgs.msg import Odometry, OccupancyGrid, Path
 from sensor_msgs.msg import CompressedImage, Imu, LaserScan, Range
 from std_msgs.msg import Bool, Empty, Float32, Float64, Int32, Int32MultiArray, String, UInt8MultiArray
 from std_srvs.srv import Trigger
@@ -257,6 +257,18 @@ INDEX_HTML = """<!doctype html>
                     <div class=\"kv\" style=\"margin-top:3px;font-size:11px;color:#888;\">
                         Waypoints: <span id=\"odomWpCount\">0</span> &nbsp;|&nbsp; Trail: <span id=\"odomTrailCount\">0</span>
                     </div>
+                    <div style=\"margin-top:8px;padding-top:6px;border-top:1px solid #eee;\">
+                        <div class=\"kv\" style=\"font-size:12px;\">&#128506; SLAM Map: <span id=\"slamStatus\" style=\"color:#888;\">waiting…</span></div>
+                        <div style=\"display:flex;gap:6px;margin-top:4px;flex-wrap:wrap;\">
+                            <button id=\"slamResetBtn\" title=\"Clear occupancy grid and reset SLAM\">&#128465; Reset Map</button>
+                            <label style=\"display:flex;align-items:center;gap:4px;font-size:12px;\"><input type=\"checkbox\" id=\"slamOverlay\" checked /> Show map</label>
+                        </div>
+                        <div class=\"kv\" style=\"margin-top:4px;font-size:11px;\">
+                            <span style=\"background:#ddd;display:inline-block;width:10px;height:10px;border:1px solid #aaa;\"></span> free &nbsp;
+                            <span style=\"background:#333;display:inline-block;width:10px;height:10px;border:1px solid #aaa;\"></span> wall &nbsp;
+                            Cells: <span id=\"slamCells\">0</span>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -276,6 +288,15 @@ INDEX_HTML = """<!doctype html>
                         <tr><td style=\"padding:3px 6px;color:#666;\">FOV</td><td id=\"lidarFov\" style=\"padding:3px 6px;\">—°</td></tr>
                         <tr><td style=\"padding:3px 6px;color:#666;\">Status</td><td id=\"lidarStatus\" style=\"padding:3px 6px;color:#888;\">waiting…</td></tr>
                     </table>
+                    <div style=\"margin-top:8px;padding-top:6px;border-top:1px solid #eee;\">
+                        <div class=\"kv\" style=\"font-size:12px;\">&#128737; Obstacle Zones</div>
+                        <table style=\"width:100%;border-collapse:collapse;font-size:12px;font-family:ui-monospace,monospace;margin-top:2px;\">
+                            <tr><td style=\"padding:2px 6px;color:#666;\">Front</td><td id=\"ozFront\" style=\"padding:2px 6px;\">—</td></tr>
+                            <tr><td style=\"padding:2px 6px;color:#666;\">Left</td><td id=\"ozLeft\" style=\"padding:2px 6px;\">—</td></tr>
+                            <tr><td style=\"padding:2px 6px;color:#666;\">Right</td><td id=\"ozRight\" style=\"padding:2px 6px;\">—</td></tr>
+                            <tr><td style=\"padding:2px 6px;color:#666;\">Rear</td><td id=\"ozRear\" style=\"padding:2px 6px;\">—</td></tr>
+                        </table>
+                    </div>
                     <div style=\"margin-top:10px;\">
                         <label for=\"lidarZoom\">Zoom: <span id=\"lidarZoomVal\">auto</span></label>
                         <input id=\"lidarZoom\" type=\"range\" min=\"0\" max=\"12\" step=\"0.5\" value=\"0\" style=\"width:100%;\" />
@@ -1658,11 +1679,23 @@ INDEX_HTML = """<!doctype html>
         const odomReturnBtn = document.getElementById('odomReturnBtn');
         const odomCancelBtn = document.getElementById('odomCancelBtn');
 
+        // SLAM map elements
+        const slamStatusEl = document.getElementById('slamStatus');
+        const slamCellsEl = document.getElementById('slamCells');
+        const slamResetBtn = document.getElementById('slamResetBtn');
+        const slamOverlayChk = document.getElementById('slamOverlay');
+
         let odomRecording = false;
         let odomReturning = false;
         let odomTotalDist = 0.0;
         let odomPrevX = null, odomPrevY = null;
         let odomBusy = false; // prevent double-clicks during service calls
+
+        // SLAM map state
+        let lastMapData = null;
+        let lastMapBytes = null;  // decoded Uint8Array
+        let slamOverlayOn = true;
+        slamOverlayChk.addEventListener('change', function() { slamOverlayOn = this.checked; });
 
         function drawOdomMap(data) {
             const W = odomCanvas.width, H = odomCanvas.height;
@@ -1685,6 +1718,37 @@ INDEX_HTML = """<!doctype html>
             // Top-down view: +X (forward) = UP, +Y (left) = LEFT
             function toCanvas(mx, my) {
                 return [cx - my * scale, cy - mx * scale];
+            }
+
+            // ── SLAM occupancy grid overlay ──────────────────────────
+            if (slamOverlayOn && lastMapData && lastMapData.available && lastMapBytes) {
+                const mw = lastMapData.width, mh = lastMapData.height;
+                const mres = lastMapData.resolution;
+                const ox = lastMapData.origin_x, oy = lastMapData.origin_y;
+                const cellPx = Math.max(1, mres * scale);
+                let mappedCells = 0;
+
+                for (let row = 0; row < mh; row++) {
+                    for (let col = 0; col < mw; col++) {
+                        const v = lastMapBytes[row * mw + col];
+                        if (v === 255) continue; // skip unknown
+
+                        const wx = ox + col * mres;
+                        const wy = oy + row * mres;
+                        const pcx = cx - wy * scale;
+                        const pcy = cy - wx * scale;
+
+                        // Skip off-screen cells
+                        if (pcx < -cellPx || pcx > W || pcy < -cellPx || pcy > H) continue;
+
+                        const occ = v / 100.0;
+                        const gray = Math.round(230 * (1 - occ));
+                        odomCtx.fillStyle = 'rgba(' + gray + ',' + gray + ',' + gray + ',0.65)';
+                        odomCtx.fillRect(pcx - cellPx / 2, pcy - cellPx / 2, cellPx, cellPx);
+                        mappedCells++;
+                    }
+                }
+                slamCellsEl.textContent = mappedCells;
             }
 
             // Grid lines (auto-adjust spacing for zoom level)
@@ -1944,6 +2008,46 @@ INDEX_HTML = """<!doctype html>
             await odomServiceCall('/api/odom/cancel_return');
         });
 
+        // ── SLAM map polling (1 Hz) ──────────────────────────────────
+        async function fetchMap() {
+            try {
+                const r = await fetch('/api/map', {cache: 'no-store'});
+                if (!r.ok) return;
+                const d = await r.json();
+                if (d.available) {
+                    lastMapData = d;
+                    // Decode base64 to Uint8Array
+                    const raw = atob(d.data);
+                    const arr = new Uint8Array(raw.length);
+                    for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+                    lastMapBytes = arr;
+                    slamStatusEl.textContent = d.width + '\\u00d7' + d.height + ' (' + d.age_s + 's)';
+                    slamStatusEl.style.color = '#080';
+                } else {
+                    slamStatusEl.textContent = 'no data';
+                    slamStatusEl.style.color = '#888';
+                }
+            } catch(e) {
+                slamStatusEl.textContent = 'error';
+                slamStatusEl.style.color = '#b00';
+            }
+        }
+        setInterval(fetchMap, 1000);
+        fetchMap();
+
+        slamResetBtn.addEventListener('click', async () => {
+            slamResetBtn.disabled = true;
+            slamStatusEl.textContent = '\\u231b resetting\\u2026';
+            try {
+                await fetch('/api/slam/reset', {method: 'POST'});
+                lastMapData = null;
+                lastMapBytes = null;
+                slamCellsEl.textContent = '0';
+            } catch(e) {}
+            slamResetBtn.disabled = false;
+            await fetchMap();
+        });
+
         // ──────────────────────────────────────────────────────────────
         // LiDAR Scan Visualisation
         // ──────────────────────────────────────────────────────────────
@@ -2105,6 +2209,32 @@ INDEX_HTML = """<!doctype html>
         // Poll lidar at 5 Hz
         setInterval(fetchLidar, 200);
         fetchLidar();
+
+        // ── LiDAR obstacle zone polling (5 Hz alongside lidar scan) ─
+        const ozFrontEl = document.getElementById('ozFront');
+        const ozLeftEl = document.getElementById('ozLeft');
+        const ozRightEl = document.getElementById('ozRight');
+        const ozRearEl = document.getElementById('ozRear');
+
+        function formatZone(val) {
+            if (val >= 90) return '\\u2014 (clear)';
+            const color = val < 0.2 ? '#d00' : val < 0.5 ? '#c80' : '#080';
+            return '<span style=\"color:' + color + ';font-weight:bold;\">' + val.toFixed(2) + ' m</span>';
+        }
+
+        async function fetchLidarZones() {
+            try {
+                const r = await fetch('/api/lidar_zones', {cache: 'no-store'});
+                if (!r.ok) return;
+                const d = await r.json();
+                ozFrontEl.innerHTML = formatZone(d.front || 99);
+                ozLeftEl.innerHTML = formatZone(d.left || 99);
+                ozRightEl.innerHTML = formatZone(d.right || 99);
+                ozRearEl.innerHTML = formatZone(d.rear || 99);
+            } catch(e) {}
+        }
+        setInterval(fetchLidarZones, 200);
+        fetchLidarZones();
 
         // ──────────────────────────────────────────────────────────────
         // Depth Map (Hailo-8 fast_depth)
@@ -2609,6 +2739,55 @@ class WebVideoNode(Node):
             LaserScan, scan_topic, self._on_scan, qos_profile_sensor_data
         )
         self.get_logger().info(f"LiDAR scan topic: {scan_topic}")
+
+        # ── SLAM map integration ──────────────────────────────────────
+        self.declare_parameter("map_topic", "map")
+        map_topic = str(self.get_parameter("map_topic").value)
+
+        self._map_data: list = []       # raw occupancy data (-1, 0–100)
+        self._map_width = 0
+        self._map_height = 0
+        self._map_resolution = 0.05
+        self._map_origin_x = 0.0
+        self._map_origin_y = 0.0
+        self._map_last_monotonic = 0.0
+
+        self._map_sub = self.create_subscription(
+            OccupancyGrid, map_topic, self._on_map, 10
+        )
+        self.get_logger().info(f"SLAM map topic: {map_topic}")
+
+        # ── SLAM service clients ──────────────────────────────────────
+        self._slam_reset_cli = self.create_client(Trigger, 'slam/reset')
+
+        # ── LiDAR obstacle zone ranges ────────────────────────────────
+        self.declare_parameter("lidar_front_range_topic", "lidar/front_range")
+        self.declare_parameter("lidar_left_range_topic", "lidar/left_range")
+        self.declare_parameter("lidar_right_range_topic", "lidar/right_range")
+        self.declare_parameter("lidar_rear_range_topic", "lidar/rear_range")
+
+        self._lidar_front_range = float('inf')
+        self._lidar_left_range = float('inf')
+        self._lidar_right_range = float('inf')
+        self._lidar_rear_range = float('inf')
+        self._lidar_zones_last = 0.0
+
+        self.create_subscription(
+            Range, str(self.get_parameter("lidar_front_range_topic").value),
+            self._on_lidar_front, 10
+        )
+        self.create_subscription(
+            Range, str(self.get_parameter("lidar_left_range_topic").value),
+            self._on_lidar_left, 10
+        )
+        self.create_subscription(
+            Range, str(self.get_parameter("lidar_right_range_topic").value),
+            self._on_lidar_right, 10
+        )
+        self.create_subscription(
+            Range, str(self.get_parameter("lidar_rear_range_topic").value),
+            self._on_lidar_rear, 10
+        )
 
     @staticmethod
     def _clamp(x: float, lo: float, hi: float) -> float:
@@ -3408,6 +3587,85 @@ class WebVideoNode(Node):
             'last_age_s': age,
         }
 
+    # ── SLAM map callbacks ────────────────────────────────────────────
+
+    def _on_map(self, msg: OccupancyGrid) -> None:
+        """Store latest occupancy grid for /api/map endpoint."""
+        self._map_data = list(msg.data)
+        self._map_width = msg.info.width
+        self._map_height = msg.info.height
+        self._map_resolution = msg.info.resolution
+        self._map_origin_x = msg.info.origin.position.x
+        self._map_origin_y = msg.info.origin.position.y
+        self._map_last_monotonic = time.monotonic()
+
+    def get_map_dict(self) -> dict:
+        """Build map data dict for /api/map endpoint."""
+        now = time.monotonic()
+        if not self._map_data or self._map_last_monotonic == 0.0:
+            return {'available': False}
+
+        age = round(max(0.0, now - self._map_last_monotonic), 3)
+
+        # Encode as base64: -1 → 255, 0–100 → 0–100
+        import base64
+        data_bytes = bytes(
+            255 if v < 0 else min(v, 100) for v in self._map_data
+        )
+        return {
+            'available': True,
+            'width': self._map_width,
+            'height': self._map_height,
+            'resolution': round(self._map_resolution, 4),
+            'origin_x': round(self._map_origin_x, 4),
+            'origin_y': round(self._map_origin_y, 4),
+            'data': base64.b64encode(data_bytes).decode('ascii'),
+            'age_s': age,
+        }
+
+    def slam_reset(self) -> dict:
+        """Call slam/reset service."""
+        if not self._slam_reset_cli.wait_for_service(timeout_sec=0.5):
+            return {'success': False, 'message': 'SLAM service not available'}
+        req = Trigger.Request()
+        future = self._slam_reset_cli.call_async(req)
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            if future.done():
+                result = future.result()
+                return {'success': result.success, 'message': result.message}
+            time.sleep(0.02)
+        return {'success': False, 'message': 'Timeout waiting for slam/reset'}
+
+    # ── LiDAR obstacle zone callbacks ─────────────────────────────────
+
+    def _on_lidar_front(self, msg: Range) -> None:
+        self._lidar_front_range = float(msg.range) if not math.isinf(msg.range) else 99.0
+        self._lidar_zones_last = time.monotonic()
+
+    def _on_lidar_left(self, msg: Range) -> None:
+        self._lidar_left_range = float(msg.range) if not math.isinf(msg.range) else 99.0
+
+    def _on_lidar_right(self, msg: Range) -> None:
+        self._lidar_right_range = float(msg.range) if not math.isinf(msg.range) else 99.0
+
+    def _on_lidar_rear(self, msg: Range) -> None:
+        self._lidar_rear_range = float(msg.range) if not math.isinf(msg.range) else 99.0
+
+    def get_lidar_zones_dict(self) -> dict:
+        """Build obstacle zone dict for /api/lidar_zones."""
+        now = time.monotonic()
+        age = None
+        if self._lidar_zones_last > 0.0:
+            age = round(max(0.0, now - self._lidar_zones_last), 3)
+        return {
+            'front': round(self._lidar_front_range, 3),
+            'left': round(self._lidar_left_range, 3),
+            'right': round(self._lidar_right_range, 3),
+            'rear': round(self._lidar_rear_range, 3),
+            'age_s': age,
+        }
+
     # ── Rotate-to-angle controller ────────────────────────────────────
 
     def start_rotate(self, target_deg: float, speed: float = 0.5) -> None:
@@ -3565,6 +3823,9 @@ def make_handler(
     odom_return_to_origin=None,
     odom_cancel_return=None,
     scan_provider=None,
+    map_provider=None,
+    lidar_zones_provider=None,
+    slam_reset=None,
 ):
     boundary = b"--frame"
     fps = max(float(fps_limit), 1.0)
@@ -3734,6 +3995,46 @@ def make_handler(
                         payload = scan_provider()
                     except Exception:
                         payload = {'error': 'scan_provider_failed'}
+                body = (json.dumps(payload) + "\n").encode("utf-8")
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-cache")
+                self.end_headers()
+                self.wfile.write(body)
+                try:
+                    self.wfile.flush()
+                except Exception:
+                    pass
+                return
+
+            if path == "/api/map":
+                payload = {}
+                if callable(map_provider):
+                    try:
+                        payload = map_provider()
+                    except Exception:
+                        payload = {'available': False, 'error': 'map_provider_failed'}
+                body = (json.dumps(payload) + "\n").encode("utf-8")
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-cache")
+                self.end_headers()
+                self.wfile.write(body)
+                try:
+                    self.wfile.flush()
+                except Exception:
+                    pass
+                return
+
+            if path == "/api/lidar_zones":
+                payload = {}
+                if callable(lidar_zones_provider):
+                    try:
+                        payload = lidar_zones_provider()
+                    except Exception:
+                        payload = {'error': 'lidar_zones_provider_failed'}
                 body = (json.dumps(payload) + "\n").encode("utf-8")
                 self.send_response(HTTPStatus.OK)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -4568,6 +4869,7 @@ def make_handler(
                 '/api/odom/stop_recording': odom_stop_recording,
                 '/api/odom/return_to_origin': odom_return_to_origin,
                 '/api/odom/cancel_return': odom_cancel_return,
+                '/api/slam/reset': slam_reset,
             }
             if path in odom_service_map:
                 handler_fn = odom_service_map[path]
@@ -4655,6 +4957,9 @@ def main() -> None:
         odom_return_to_origin=node.odom_return_to_origin,
         odom_cancel_return=node.odom_cancel_return,
         scan_provider=node.get_scan_dict,
+        map_provider=node.get_map_dict,
+        lidar_zones_provider=node.get_lidar_zones_dict,
+        slam_reset=node.slam_reset,
     )
     httpd = ThreadingHTTPServer((bind, port), handler_cls)
     # Allow the serve loop to wake up periodically so Ctrl-C / rclpy shutdown is responsive.

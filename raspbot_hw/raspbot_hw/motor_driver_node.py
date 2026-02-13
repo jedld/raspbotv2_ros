@@ -115,6 +115,13 @@ class MotorDriverNode(Node):
         self.declare_parameter('collision_ultrasonic_topic', 'ultrasonic/range')
         self.declare_parameter('collision_failsafe_timeout_sec', 1.0)  # stale data timeout
 
+        # ── LiDAR front-zone obstacle integration ────────────────────
+        # Complements ultrasonic with 360° LiDAR data from lidar_obstacle_node.
+        # Uses the minimum of ultrasonic and lidar front range for collision checks.
+        self.declare_parameter('lidar_front_range_topic', 'lidar/front_range')
+        self.declare_parameter('lidar_collision_enable', True)
+        self.declare_parameter('lidar_collision_timeout_sec', 1.0)
+
         # ── Cliff / edge failsafe (line-tracker) ───────────────────────
         # Uses the downward-facing IR reflectance sensors (line trackers) to
         # detect when the floor disappears (stairs, table edge, hole).
@@ -231,6 +238,13 @@ class MotorDriverNode(Node):
         self._collision_active = False  # True when forward motion is being blocked
         self._collision_logged = False  # avoid log spam
 
+        # ── LiDAR front-zone collision state ──────────────────────────
+        self._lidar_collision_enable = bool(self.get_parameter('lidar_collision_enable').value)
+        self._lidar_front_topic = str(self.get_parameter('lidar_front_range_topic').value)
+        self._lidar_collision_timeout = float(self.get_parameter('lidar_collision_timeout_sec').value)
+        self._lidar_front_distance = float('inf')
+        self._lidar_front_last_time = 0.0
+
         # ── Cliff failsafe state ──────────────────────────────────────
         self._cliff_enable = bool(self.get_parameter('cliff_failsafe_enable').value)
         self._cliff_topic = str(self.get_parameter('cliff_tracking_topic').value)
@@ -288,6 +302,15 @@ class MotorDriverNode(Node):
                 Range, self._collision_topic, self._on_ultrasonic, 10
             )
             self.get_logger().info('Collision failsafe DISABLED (can be enabled via topic or param)')
+
+        # ── LiDAR front-zone collision subscription ─────────────────
+        self.create_subscription(
+            Range, self._lidar_front_topic, self._on_lidar_front_range, 10
+        )
+        if self._lidar_collision_enable:
+            self.get_logger().info(
+                f'LiDAR collision integration ENABLED (topic={self._lidar_front_topic})'
+            )
 
         # ── Cliff failsafe subscription & publisher ───────────────────
         self._cliff_enable_sub = self.create_subscription(
@@ -597,6 +620,15 @@ class MotorDriverNode(Node):
         else:
             self._collision_distance = max(d, 0.0)
         self._collision_last_time = time.time()
+    def _on_lidar_front_range(self, msg: Range) -> None:
+        """Update front obstacle distance from LiDAR obstacle node."""
+        d = msg.range
+        if math.isnan(d) or math.isinf(d):
+            self._lidar_front_distance = float('inf')
+        else:
+            self._lidar_front_distance = max(d, 0.0)
+        self._lidar_front_last_time = time.time()
+
     def _on_collision_enable(self, msg: Bool) -> None:
         """Enable/disable collision failsafe via topic (from web UI)."""
         was = self._collision_enable
@@ -652,7 +684,12 @@ class MotorDriverNode(Node):
                     self._collision_active_pub.publish(b)
             return vx
 
+        # Use minimum of ultrasonic and lidar front distance
         dist = self._collision_distance
+        if self._lidar_collision_enable:
+            lidar_stale = (time.time() - self._lidar_front_last_time) > self._lidar_collision_timeout
+            if not lidar_stale:
+                dist = min(dist, self._lidar_front_distance)
         stop_d = self._collision_stop_dist
         slow_d = self._collision_slow_dist
 

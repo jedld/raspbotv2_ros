@@ -33,6 +33,8 @@ setup(
             'oled = raspbot_hw.oled_node:main',
             'pi_camera = raspbot_hw.pi_camera_node:main',
             'odometry = raspbot_hw.odometry_node:main',
+            'lidar_slam = raspbot_hw.lidar_slam_node:main',
+            'lidar_obstacle = raspbot_hw.lidar_obstacle_node:main',
         ],
     },
 )

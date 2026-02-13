@@ -61,6 +61,9 @@ ros2 launch raspbot_bringup bringup.launch.py enable_lidar:=false
 ros2 launch raspbot_bringup bringup.launch.py enable_front_camera:=false
 ros2 launch raspbot_bringup bringup.launch.py enable_imu:=false
 
+# Disable SLAM and obstacle avoidance
+ros2 launch raspbot_bringup bringup.launch.py enable_slam:=false enable_lidar_obstacle:=false
+
 # Disable depth estimation (empty path)
 ros2 launch raspbot_bringup bringup.launch.py depth_hef_path:=
 
@@ -87,6 +90,8 @@ ros2 launch raspbot_bringup bringup.launch.py \
 | `enable_bno055` | `false` | Standalone BNO055 9-DOF via Pico RP2040 bridge |
 | `enable_odometry` | `true` | Dead-reckoning odometry + path recording + return-to-origin |
 | `enable_lidar` | `true` | YDLidar T-mini Plus (360° laser scan) |
+| `enable_slam` | `true` | LiDAR occupancy grid SLAM (map + TF `map→odom`) |
+| `enable_lidar_obstacle` | `true` | 360° LiDAR obstacle avoidance (4-zone Range) |
 | `enable_web_video` | `true` | Web UI (port 8080) |
 | `enable_hailo` | `true` | Hailo-8 detection + depth |
 | `play_startup_sound` | `true` | Play sound on boot |
@@ -132,7 +137,15 @@ ros2 launch raspbot_bringup bringup.launch.py \
 | `odom/recording` | `Bool` | True while path recording is active |
 | `odom/returning` | `Bool` | True while return-to-origin is in progress |
 | TF: `odom` → `base_link` | `TransformStamped` | Odometry transform |
+| TF: `map` → `odom` | `TransformStamped` | SLAM map-to-odom correction (10 Hz) |
 | TF: `base_link` → `laser_frame` | `TransformStamped` | Static LiDAR offset (0.05 m Z) |
+| `map` | `OccupancyGrid` | Occupancy grid (200×200 @ 0.05 m = 10 m²) |
+| `slam/active` | `Bool` | True while SLAM node is running |
+| `lidar/front_range` | `Range` | LiDAR min distance — front zone (±30°) |
+| `lidar/left_range` | `Range` | LiDAR min distance — left zone (30°–150°) |
+| `lidar/right_range` | `Range` | LiDAR min distance — right zone |
+| `lidar/rear_range` | `Range` | LiDAR min distance — rear zone |
+| `lidar_obstacle/active` | `Bool` | True while obstacle avoidance is running |
 
 ### AI / Hailo-8
 
@@ -180,6 +193,7 @@ ros2 launch raspbot_bringup bringup.launch.py \
 | `odom/stop_recording` | `Trigger` | odometry | Stop recording |
 | `odom/return_to_origin` | `Trigger` | odometry | Autonomously retrace path in reverse |
 | `odom/cancel_return` | `Trigger` | odometry | Abort return-to-origin |
+| `slam/reset` | `Trigger` | lidar_slam | Clear occupancy grid and reset map |
 
 ## Motor driver features
 
@@ -190,13 +204,57 @@ The mecanum motor driver (`motor_driver` node) includes:
 - **Adaptive motor trim** — learns L/R asymmetry from sustained PID corrections, reducing correction load over time
 - **Per-motor manual trim** — `trim_fl`/`trim_fr`/`trim_rl`/`trim_rr` for known hardware bias
 - **Lateral drift correction** — accelerometer-based sideways drift compensation (mecanum-specific)
-- **Collision failsafe** — ultrasonic-based forward stop/slowdown zone (configurable distances, runtime toggle)
+- **Collision failsafe** — ultrasonic + LiDAR front range fusion: uses `min(ultrasonic, lidar_front)` for forward stop/slowdown zone (configurable distances, runtime toggle)
 - **Cliff failsafe** — IR line-tracker-based edge detection blocks forward motion (configurable sensor mask)
 - **Startup kick** — brief PWM boost to overcome static friction
 - **Strafe stabilisation** — correction deadband + PWM slew rate limiting during pure strafe
 - **Differential mode** — alternative 2-wheel drive mode (`drive_mode: "differential"`)
 
 All parameters are runtime-tunable via `ros2 param set`.
+
+## LiDAR SLAM & obstacle avoidance
+
+### Occupancy grid SLAM (`lidar_slam` node)
+
+A lightweight pure-Python SLAM node designed for the Pi 5's constrained resources.
+Builds an occupancy grid from `/scan` + `/odom` using log-odds Bresenham ray-casting.
+
+- **Grid**: 200×200 cells at 0.05 m resolution (10 m × 10 m)
+- **Update rate**: 2 Hz scan processing, 1 Hz map publish, 10 Hz TF broadcast
+- **Scan downsample**: 3× (every 3rd ray) to reduce CPU
+- **Optional scan matching**: Correlative scan-to-map matching for drift correction (disabled by default — `slam_scan_match_enable: true` to enable)
+- Publishes: `/map` (OccupancyGrid), TF `map→odom`, `/slam/active` (Bool)
+- Service: `slam/reset` — clears the grid
+
+Key parameters (in `raspbot_hw.yaml` under `lidar_slam:`):
+
+| Parameter | Default | Description |
+|---|---|---|
+| `slam_resolution` | `0.05` | Cell size in metres |
+| `slam_width` / `slam_height` | `200` | Grid dimensions (cells) |
+| `slam_update_hz` | `2.0` | Scan processing rate |
+| `slam_map_publish_hz` | `1.0` | OccupancyGrid publish rate |
+| `slam_min_range` / `slam_max_range` | `0.1` / `8.0` | Valid scan range |
+| `slam_scan_downsample` | `3` | Use every Nth ray |
+| `slam_scan_match_enable` | `false` | Enable correlative scan matching |
+| `slam_scan_match_search_xy` | `0.3` | Search window (metres) |
+| `slam_scan_match_search_yaw` | `0.15` | Search window (radians) |
+
+### LiDAR obstacle avoidance (`lidar_obstacle` node)
+
+Divides the 360° scan into four angular zones and publishes the minimum distance
+for each as `sensor_msgs/Range`:
+
+| Zone | Angular range | Topic |
+|---|---|---|
+| Front | ±30° from 0° | `lidar/front_range` |
+| Left | 30°–150° | `lidar/left_range` |
+| Rear | 150°–210° | `lidar/rear_range` |
+| Right | 210°–330° | `lidar/right_range` |
+
+- **Stop distance**: 0.20 m (robot halts)
+- **Slow distance**: 0.50 m (speed reduced)
+- The motor driver fuses `lidar/front_range` with the ultrasonic sensor for collision failsafe: `effective_distance = min(ultrasonic, lidar_front)`
 
 ## Web UI features (port 8080)
 
@@ -210,8 +268,9 @@ All parameters are runtime-tunable via `ros2 param set`.
 - **Cliff/edge failsafe**: toggle + per-sensor status display
 - **Light bar**: colour picker, per-LED control, breathing/rainbow/chase effects
 - **Snapshots**: capture full-resolution stills to `~/Pictures/raspbot/`
-- **Odometry & navigation**: canvas path visualisation, X/Y/yaw readouts, distance/speed, record/stop/return-to-origin/cancel controls
+- **Odometry & navigation**: canvas path visualisation, X/Y/yaw readouts, distance/speed, record/stop/return-to-origin/cancel controls, **SLAM map overlay** (toggleable occupancy grid rendered on the path canvas with free/wall legend, cell count, and Reset Map button)
 - **LiDAR scan**: live 360° point cloud canvas with zoom, range/FOV/point count readouts
+- **LiDAR obstacle zones**: live front/left/right/rear distance table with colour-coded proximity (red < 0.2 m, orange < 0.5 m, green otherwise)
 - **IMU dashboard**: live accelerometer/gyroscope, 3D orientation cube, yaw heading, calibration status, temperature
 - **Microphone**: browser audio playback from Arduino PDM mic (8 kHz)
 - **Depth map**: toggleable Hailo-8 monocular depth visualization with TURBO colormap
