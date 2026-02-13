@@ -443,7 +443,7 @@ front_calibration:
     static_samples: 15               # number of scan+US samples
     static_sample_interval: 0.15     # seconds between samples
     us_beam_half_deg: 15.0           # ultrasonic beam half-angle
-    us_match_tolerance_m: 0.08       # max range difference for match
+    us_match_tolerance_m: 0.20       # max range difference for match
     us_max_range: 3.0                # ignore US readings above this
 
     # Motion calibration (drive-and-scan)

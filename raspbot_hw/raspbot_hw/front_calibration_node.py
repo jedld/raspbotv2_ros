@@ -79,7 +79,7 @@ class FrontCalibrationNode(Node):
         self.declare_parameter('static_samples', 15)        # scan + US samples
         self.declare_parameter('static_sample_interval', 0.15)  # seconds
         self.declare_parameter('us_beam_half_deg', 15.0)     # ultrasonic half-cone
-        self.declare_parameter('us_match_tolerance_m', 0.08) # range match tolerance
+        self.declare_parameter('us_match_tolerance_m', 0.20) # range match tolerance
         self.declare_parameter('us_max_range', 3.0)          # ignore US > this
 
         # Motion calibration
@@ -407,29 +407,55 @@ class FrontCalibrationNode(Node):
                 best_score = score
                 best_angle = center_angle
 
-        if best_score > tolerance:
-            # No angle matched within tolerance
+        # Dynamic tolerance — at close range the physical mounting offset
+        # between the US sensor and LiDAR dominates, so widen tolerance.
+        effective_tol = max(tolerance, us_mean * 0.75)
+
+        matched = best_score <= effective_tol
+        match_method = 'absolute'
+
+        # Fallback: relative scoring — if this angle is clearly dominant
+        # (much lower score than the median), accept it.
+        if not matched and len(candidates) >= 10:
+            scores = sorted(c['score'] for c in candidates)
+            median_score = scores[len(scores) // 2]
+            if median_score > 0 and best_score < median_score * 0.4:
+                matched = True
+                match_method = 'relative'
+                self.get_logger().info(
+                    f'[Cal/static] Tolerance exceeded but best score '
+                    f'({best_score:.3f}m) is clearly dominant '
+                    f'(median={median_score:.3f}m), accepting')
+
+        if not matched:
             return {
                 'success': False,
                 'error': f'No LiDAR angle matched ultrasonic range '
-                         f'({us_mean:.3f}m) within tolerance ({tolerance}m). '
-                         f'Best score: {best_score:.3f}m. '
-                         f'Place the robot facing a wall 0.1–2 m away and retry.',
+                         f'({us_mean:.3f}m) within tolerance '
+                         f'({effective_tol:.3f}m). '
+                         f'Best score: {best_score:.3f}m at '
+                         f'{round(best_angle * RAD_TO_DEG, 1)}°. '
+                         f'Place the robot facing a wall 0.1–2 m away '
+                         f'and retry.',
                 'us_mean_m': round(us_mean, 3),
                 'best_score': round(best_score, 4),
                 'best_angle_deg': round(best_angle * RAD_TO_DEG, 1),
+                'effective_tolerance_m': round(effective_tol, 3),
             }
 
         offset_deg = round(best_angle * RAD_TO_DEG, 1)
         self.get_logger().info(
             f'[Cal/static] Ultrasonic = {us_mean:.3f}m, '
-            f'best LiDAR match at {offset_deg}° (score={best_score:.3f}m)')
+            f'best LiDAR match at {offset_deg}° '
+            f'(score={best_score:.3f}m, method={match_method})')
 
         return {
             'success': True,
             'offset_deg': offset_deg,
             'us_mean_m': round(us_mean, 3),
             'match_score': round(best_score, 4),
+            'match_method': match_method,
+            'confidence': 'high' if best_score <= tolerance else 'medium',
             'interpretation': self._interpret_offset(offset_deg),
         }
 
@@ -468,10 +494,20 @@ class FrontCalibrationNode(Node):
         if before is None:
             return {'success': False, 'error': 'Could not collect before-scans'}
 
-        # ── Drive forward ──────────────────────────────────────────────
+        # ── Determine drive direction ──────────────────────────────────
+        # If the robot is very close to a wall the collision failsafe will
+        # block forward motion.  Drive backward instead and invert the
+        # delta interpretation.
+        us_range = self._latest_us
+        drive_backward = (us_range is not None and us_range < 0.25)
+        actual_speed = -drive_speed if drive_backward else drive_speed
+        direction = 'backward' if drive_backward else 'forward'
+        us_str = f'{us_range:.2f}m' if us_range is not None else 'N/A'
+
         self.get_logger().info(
-            f'[Cal/motion] Driving forward at {drive_speed} m/s for {drive_dur}s')
-        self._drive(drive_speed, 0.0, drive_dur)
+            f'[Cal/motion] Driving {direction} at {abs(actual_speed)} m/s '
+            f'for {drive_dur}s (US={us_str})')
+        self._drive(actual_speed, 0.0, drive_dur)
         time.sleep(settle)
 
         # ── Collect after scans ────────────────────────────────────────
@@ -515,35 +551,48 @@ class FrontCalibrationNode(Node):
             if count > 0:
                 smoothed[i] = total / count
 
-        # Forward = angle with most negative smoothed delta
-        min_delta = 0.0
+        # Forward direction detection
+        extreme_delta = 0.0
         best_i = 0
-        for i in range(n_rays):
-            if smoothed[i] < min_delta:
-                min_delta = smoothed[i]
-                best_i = i
+
+        if drive_backward:
+            # Drove backward: wall in front moved further → positive delta.
+            # Forward = angle with the most POSITIVE smoothed delta.
+            for i in range(n_rays):
+                if smoothed[i] > extreme_delta:
+                    extreme_delta = smoothed[i]
+                    best_i = i
+        else:
+            # Drove forward: wall in front moved closer → negative delta.
+            # Forward = angle with the most NEGATIVE smoothed delta.
+            for i in range(n_rays):
+                if smoothed[i] < extreme_delta:
+                    extreme_delta = smoothed[i]
+                    best_i = i
 
         fwd_angle = normalize_angle(
             ref_scan.angle_min + best_i * ref_scan.angle_increment)
         fwd_deg = round(fwd_angle * RAD_TO_DEG, 1)
 
-        # The delta should be meaningfully negative (robot moved ~5cm)
-        if abs(min_delta) < 0.01:
+        # The delta should be meaningful (robot actually moved)
+        if abs(extreme_delta) < 0.01:
             return {
                 'success': False,
                 'error': 'Range change too small — robot may not have moved. '
                          'Ensure wheels have traction and path is clear.',
-                'max_delta_m': round(min_delta, 4),
+                'max_delta_m': round(extreme_delta, 4),
+                'drove_backward': drive_backward,
             }
 
         self.get_logger().info(
             f'[Cal/motion] Forward direction at {fwd_deg}° '
-            f'(range delta = {min_delta:.3f}m)')
+            f'(range delta={extreme_delta:.3f}m, drove {direction})')
 
         return {
             'success': True,
             'forward_angle_deg': fwd_deg,
-            'range_delta_m': round(min_delta, 3),
+            'range_delta_m': round(extreme_delta, 3),
+            'drove_backward': drive_backward,
             'interpretation': self._interpret_offset(fwd_deg),
         }
 
