@@ -61,6 +61,7 @@ class LidarObstacleNode(Node):
         'side_slow_distance': '_side_slow_dist',
         'rear_stop_distance': '_rear_stop_dist',
         'rear_slow_distance': '_rear_slow_dist',
+        'lidar_yaw_offset': '_yaw_offset',
     }
 
     def __init__(self):
@@ -88,6 +89,9 @@ class LidarObstacleNode(Node):
         self.declare_parameter('max_range', 12.0)
         self.declare_parameter('frame_id', 'laser_frame')
 
+        # Angular offset: LiDAR forward vs robot forward (radians, set by calibration)
+        self.declare_parameter('lidar_yaw_offset', 0.0)
+
         # ── Load parameters ───────────────────────────────────────────
         scan_topic = str(self.get_parameter('scan_topic').value)
         publish_hz = float(self.get_parameter('publish_hz').value)
@@ -109,6 +113,8 @@ class LidarObstacleNode(Node):
         self._min_range = float(self.get_parameter('min_range').value)
         self._max_range = float(self.get_parameter('max_range').value)
         self._frame_id = str(self.get_parameter('frame_id').value)
+
+        self._yaw_offset = float(self.get_parameter('lidar_yaw_offset').value)
 
         # ── Zone state ────────────────────────────────────────────────
         self._front_min = float('inf')
@@ -170,6 +176,7 @@ class LidarObstacleNode(Node):
         front_half = self._front_half_angle
         side_start = self._side_start
         side_end = self._side_end
+        yaw_offset = self._yaw_offset
 
         angle = msg.angle_min
         for r in msg.ranges:
@@ -177,8 +184,8 @@ class LidarObstacleNode(Node):
                 angle += msg.angle_increment
                 continue
 
-            # Normalize to [-pi, pi]
-            a = normalize_angle(angle)
+            # Apply yaw offset: rotate scan into robot frame
+            a = normalize_angle(angle - yaw_offset)
             abs_a = abs(a)
 
             if abs_a <= front_half:

@@ -398,6 +398,11 @@ lidar_slam:
     map_frame_id: "map"
     odom_frame_id: "odom"
 
+    # Angular offset: LiDAR forward vs robot forward (radians).
+    # Set by front_calibration node, or manually measured.
+    # Positive = LiDAR 0° is CCW from robot forward.
+    lidar_yaw_offset: 0.0
+
 # ── LiDAR obstacle avoidance ──────────────────────────────────────
 lidar_obstacle:
   ros__parameters:
@@ -421,3 +426,39 @@ lidar_obstacle:
     min_range: 0.05
     max_range: 12.0
     frame_id: "laser_frame"
+
+    # Angular offset: LiDAR forward vs robot forward (radians).
+    # Set by front_calibration node, or manually measured.
+    lidar_yaw_offset: 0.0
+
+# ── Front calibration (auto-detect LiDAR / motor / IMU orientation) ─
+front_calibration:
+  ros__parameters:
+    scan_topic: "scan"
+    ultrasonic_topic: "ultrasonic/range"
+    imu_yaw_topic: "imu/yaw_deg"
+    cmd_vel_topic: "cmd_vel"
+
+    # Static calibration (LiDAR-ultrasonic cross-correlation)
+    static_samples: 15               # number of scan+US samples
+    static_sample_interval: 0.15     # seconds between samples
+    us_beam_half_deg: 15.0           # ultrasonic beam half-angle
+    us_match_tolerance_m: 0.08       # max range difference for match
+    us_max_range: 3.0                # ignore US readings above this
+
+    # Motion calibration (drive-and-scan)
+    drive_speed: 0.10                # m/s forward speed
+    drive_duration: 0.6              # seconds to drive
+    drive_settle: 0.5                # seconds to wait after stopping
+    drive_scan_samples: 8            # scans to average before/after
+    angle_smooth_window_deg: 20.0    # angular smoothing half-window
+
+    # IMU yaw check
+    rotate_speed: 0.3                # rad/s CCW rotation
+    rotate_duration: 1.0             # seconds to rotate
+    rotate_settle: 0.5               # seconds to wait after stopping
+
+    # Auto-apply corrections to SLAM and obstacle nodes
+    auto_apply: true
+    lidar_obstacle_node: "lidar_obstacle"
+    lidar_slam_node: "lidar_slam"

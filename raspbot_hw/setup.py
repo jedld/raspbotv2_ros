@@ -35,6 +35,7 @@ setup(
             'odometry = raspbot_hw.odometry_node:main',
             'lidar_slam = raspbot_hw.lidar_slam_node:main',
             'lidar_obstacle = raspbot_hw.lidar_obstacle_node:main',
+            'front_calibration = raspbot_hw.front_calibration_node:main',
         ],
     },
 )

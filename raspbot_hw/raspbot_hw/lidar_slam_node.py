@@ -74,6 +74,7 @@ class LidarSlamNode(Node):
         'slam_scan_match_enable': '_scan_match_enable',
         'slam_min_range': '_min_range',
         'slam_max_range': '_max_range',
+        'lidar_yaw_offset': '_yaw_offset',
     }
 
     def __init__(self):
@@ -121,6 +122,9 @@ class LidarSlamNode(Node):
         self.declare_parameter('map_frame_id', 'map')
         self.declare_parameter('odom_frame_id', 'odom')
 
+        # Angular offset: LiDAR forward vs robot forward (radians, set by calibration)
+        self.declare_parameter('lidar_yaw_offset', 0.0)
+
         # ── Load parameters ───────────────────────────────────────────
         self._resolution = float(self.get_parameter('slam_resolution').value)
         self._width = int(self.get_parameter('slam_width').value)
@@ -156,6 +160,8 @@ class LidarSlamNode(Node):
         odom_topic = str(self.get_parameter('odom_topic').value)
         self._map_frame = str(self.get_parameter('map_frame_id').value)
         self._odom_frame = str(self.get_parameter('odom_frame_id').value)
+
+        self._yaw_offset = float(self.get_parameter('lidar_yaw_offset').value)
 
         # ── Occupancy grid (flat list, log-odds) ──────────────────────
         self._grid = [0.0] * (self._width * self._height)
@@ -323,8 +329,8 @@ class LidarSlamNode(Node):
                 angle += scan.angle_increment
                 continue
 
-            # Endpoint in map frame
-            beam_angle = robot_yaw + angle
+            # Endpoint in map frame (apply yaw offset to correct LiDAR mounting)
+            beam_angle = robot_yaw + angle - self._yaw_offset
             ex = robot_x + r * math.cos(beam_angle)
             ey = robot_y + r * math.sin(beam_angle)
 

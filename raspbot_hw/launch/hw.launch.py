@@ -28,6 +28,7 @@ def generate_launch_description():
     enable_lidar = LaunchConfiguration('enable_lidar')
     enable_slam = LaunchConfiguration('enable_slam')
     enable_lidar_obstacle = LaunchConfiguration('enable_lidar_obstacle')
+    enable_calibration = LaunchConfiguration('enable_calibration')
     params_file = LaunchConfiguration('params_file')
 
     default_params_file = PathJoinSubstitution([
@@ -51,6 +52,7 @@ def generate_launch_description():
         DeclareLaunchArgument('enable_lidar', default_value='true'),
         DeclareLaunchArgument('enable_slam', default_value='true'),
         DeclareLaunchArgument('enable_lidar_obstacle', default_value='true'),
+        DeclareLaunchArgument('enable_calibration', default_value='true'),
         DeclareLaunchArgument('params_file', default_value=default_params_file),
 
         Node(
@@ -164,6 +166,14 @@ def generate_launch_description():
             output='screen',
             parameters=[params_file],
             condition=IfCondition(enable_lidar_obstacle),
+        ),
+        Node(
+            package='raspbot_hw',
+            executable='front_calibration',
+            name='front_calibration',
+            output='screen',
+            parameters=[params_file],
+            condition=IfCondition(enable_calibration),
         ),
 
     ])

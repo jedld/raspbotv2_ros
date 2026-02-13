@@ -289,6 +289,15 @@ INDEX_HTML = """<!doctype html>
                             Cells: <span id=\"slamCells\">0</span>
                         </div>
                     </div>
+                    <div style=\"margin-top:8px;padding-top:6px;border-top:1px solid #eee;\">
+                        <div class=\"kv\" style=\"font-size:12px;\">&#127993; Front Calibration: <span id=\"calStatus\" style=\"color:#888;\">idle</span></div>
+                        <div style=\"font-size:11px;color:#888;margin:3px 0;\">Place robot facing a wall, then calibrate.</div>
+                        <div style=\"display:flex;gap:6px;margin-top:4px;flex-wrap:wrap;\">
+                            <button id=\"calStaticBtn\" title=\"Static calibration using ultrasonic + LiDAR (no motion)\">&#128270; Static</button>
+                            <button id=\"calFullBtn\" title=\"Full calibration with brief forward drive + IMU check\">&#128296; Full</button>
+                        </div>
+                        <div id=\"calResult\" style=\"margin-top:4px;font-size:11px;color:#555;display:none;background:#f8f8f0;padding:4px 6px;border-radius:3px;border:1px solid #ddd;\"></div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -1706,6 +1715,12 @@ INDEX_HTML = """<!doctype html>
         const slamResetBtn = document.getElementById('slamResetBtn');
         const slamOverlayChk = document.getElementById('slamOverlay');
 
+        // Front calibration elements
+        const calStatusEl = document.getElementById('calStatus');
+        const calStaticBtn = document.getElementById('calStaticBtn');
+        const calFullBtn = document.getElementById('calFullBtn');
+        const calResultEl = document.getElementById('calResult');
+
         let odomRecording = false;
         let odomReturning = false;
         let odomTotalDist = 0.0;
@@ -2068,6 +2083,39 @@ INDEX_HTML = """<!doctype html>
             slamResetBtn.disabled = false;
             await fetchMap();
         });
+
+        // ── Front calibration handlers ────────────────────────────────
+        async function runCalibration(endpoint) {
+            calStaticBtn.disabled = true;
+            calFullBtn.disabled = true;
+            calStatusEl.textContent = '\u23f3 calibrating\u2026';
+            calStatusEl.style.color = '#c60';
+            calResultEl.style.display = 'none';
+            try {
+                const resp = await fetch(endpoint, {method: 'POST'});
+                const data = await resp.json();
+                calStatusEl.textContent = data.success ? '\u2705 done' : '\u274c failed';
+                calStatusEl.style.color = data.success ? '#0a0' : '#b00';
+                let html = data.message || 'No response';
+                try {
+                    const msg = JSON.parse(data.message);
+                    if (msg.offset_deg !== undefined) {
+                        html = 'Offset: <b>' + msg.offset_deg.toFixed(1) + '\u00b0</b>';
+                        if (msg.confidence) html += ' (confidence: ' + msg.confidence + ')';
+                        if (msg.recommendation) html += '<br>' + msg.recommendation;
+                    }
+                } catch(_) {}
+                calResultEl.innerHTML = html;
+                calResultEl.style.display = 'block';
+            } catch(e) {
+                calStatusEl.textContent = 'error';
+                calStatusEl.style.color = '#b00';
+            }
+            calStaticBtn.disabled = false;
+            calFullBtn.disabled = false;
+        }
+        calStaticBtn.addEventListener('click', () => runCalibration('/api/calibrate_front_static'));
+        calFullBtn.addEventListener('click', () => runCalibration('/api/calibrate_front'));
 
         // ──────────────────────────────────────────────────────────────
         // LiDAR Scan Visualisation
@@ -2780,6 +2828,10 @@ class WebVideoNode(Node):
 
         # ── SLAM service clients ──────────────────────────────────────
         self._slam_reset_cli = self.create_client(Trigger, 'slam/reset')
+
+        # ── Front calibration service clients ─────────────────────────
+        self._cal_front_cli = self.create_client(Trigger, 'calibrate_front')
+        self._cal_static_cli = self.create_client(Trigger, 'calibrate_front_static')
 
         # ── LiDAR obstacle zone ranges ────────────────────────────────
         self.declare_parameter("lidar_front_range_topic", "lidar/front_range")
@@ -3658,6 +3710,36 @@ class WebVideoNode(Node):
             time.sleep(0.02)
         return {'success': False, 'message': 'Timeout waiting for slam/reset'}
 
+    # ── Front calibration service calls ────────────────────────────────
+
+    def calibrate_front(self) -> dict:
+        """Call calibrate_front (full) service."""
+        if not self._cal_front_cli.wait_for_service(timeout_sec=0.5):
+            return {'success': False, 'message': 'Calibration service not available'}
+        req = Trigger.Request()
+        future = self._cal_front_cli.call_async(req)
+        deadline = time.time() + 30.0
+        while time.time() < deadline:
+            if future.done():
+                result = future.result()
+                return {'success': result.success, 'message': result.message}
+            time.sleep(0.05)
+        return {'success': False, 'message': 'Timeout waiting for calibration'}
+
+    def calibrate_front_static(self) -> dict:
+        """Call calibrate_front_static service."""
+        if not self._cal_static_cli.wait_for_service(timeout_sec=0.5):
+            return {'success': False, 'message': 'Static calibration service not available'}
+        req = Trigger.Request()
+        future = self._cal_static_cli.call_async(req)
+        deadline = time.time() + 15.0
+        while time.time() < deadline:
+            if future.done():
+                result = future.result()
+                return {'success': result.success, 'message': result.message}
+            time.sleep(0.05)
+        return {'success': False, 'message': 'Timeout waiting for static calibration'}
+
     # ── LiDAR obstacle zone callbacks ─────────────────────────────────
 
     def _on_lidar_front(self, msg: Range) -> None:
@@ -3847,6 +3929,8 @@ def make_handler(
     map_provider=None,
     lidar_zones_provider=None,
     slam_reset=None,
+    calibrate_front=None,
+    calibrate_front_static=None,
 ):
     boundary = b"--frame"
     fps = max(float(fps_limit), 1.0)
@@ -4891,6 +4975,8 @@ def make_handler(
                 '/api/odom/return_to_origin': odom_return_to_origin,
                 '/api/odom/cancel_return': odom_cancel_return,
                 '/api/slam/reset': slam_reset,
+                '/api/calibrate_front': calibrate_front,
+                '/api/calibrate_front_static': calibrate_front_static,
             }
             if path in odom_service_map:
                 handler_fn = odom_service_map[path]
@@ -4981,6 +5067,8 @@ def main() -> None:
         map_provider=node.get_map_dict,
         lidar_zones_provider=node.get_lidar_zones_dict,
         slam_reset=node.slam_reset,
+        calibrate_front=node.calibrate_front,
+        calibrate_front_static=node.calibrate_front_static,
     )
     httpd = ThreadingHTTPServer((bind, port), handler_cls)
     # Allow the serve loop to wake up periodically so Ctrl-C / rclpy shutdown is responsive.
