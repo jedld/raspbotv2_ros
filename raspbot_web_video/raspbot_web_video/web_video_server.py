@@ -28,33 +28,53 @@ INDEX_HTML = """<!doctype html>
   <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
   <title>Raspbot Camera</title>
   <style>
-    body { font-family: system-ui, sans-serif; margin: 16px; }
-    .wrap { max-width: 960px; margin: 0 auto; }
-        .videoWrap { position: relative; width: 100%; }
-        img { width: 100%; height: auto; background: #111; border-radius: 8px; display: block; }
-        canvas.overlay { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; }
-    code { background: #f2f2f2; padding: 2px 6px; border-radius: 4px; }
-    .muted { color: #666; }
-        .card { border: 1px solid #e6e6e6; border-radius: 10px; padding: 12px; margin-top: 12px; }
-        .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
-        .row > * { flex: 1 1 220px; }
-        input[type=range] { width: 100%; }
-        button { padding: 8px 12px; border-radius: 8px; border: 1px solid #ccc; background: #fafafa; cursor: pointer; }
-        button:hover { background: #f0f0f0; }
-                button.primary { background: #111; color: #fff; border-color: #111; }
-                button.primary:hover { background: #222; }
-                button.danger { background: #b00020; color: #fff; border-color: #b00020; }
-                button.danger:hover { background: #8f001a; }
-        .kv { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 12px; }
+    *, *::before, *::after { box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; margin: 0; padding: 12px; background: #f0f2f5; color: #1a1a1a; }
+    .wrap { max-width: 1800px; margin: 0 auto; }
+    .header { margin-bottom: 10px; display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+    .header h1 { margin: 0; font-size: 20px; white-space: nowrap; }
+    .header .muted { margin: 0; }
+    .dashboard { display: grid; grid-template-columns: 1fr; gap: 10px; align-items: start; }
+    .card-stream { grid-column: 1 / -1; }
+    .videoWrap { position: relative; width: 100%; }
+    img { width: 100%; height: auto; background: #111; border-radius: 8px; display: block; }
+    canvas.overlay { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; }
+    code { background: #e8e8e8; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+    .muted { color: #888; font-size: 12px; margin: 2px 0 6px; }
+    .card { border: 1px solid #dde0e4; border-radius: 10px; padding: 12px; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+    .card h2 { margin: 0 0 2px; font-size: 15px; line-height: 1.3; }
+    .card > .muted { margin-bottom: 8px; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    .row > * { flex: 1 1 180px; }
+    input[type=range] { width: 100%; }
+    button { padding: 6px 12px; border-radius: 8px; border: 1px solid #ccc; background: #fafafa; cursor: pointer; font-size: 13px; }
+    button:hover { background: #eee; }
+    button.primary { background: #111; color: #fff; border-color: #111; }
+    button.primary:hover { background: #333; }
+    button.danger { background: #b00020; color: #fff; border-color: #b00020; }
+    button.danger:hover { background: #8f001a; }
+    .kv { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 12px; }
+    @media (min-width: 960px) {
+      .dashboard { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (min-width: 1400px) {
+      .dashboard { grid-template-columns: repeat(3, 1fr); }
+      .card-stream { grid-column: span 2; }
+    }
   </style>
 </head>
 <body>
   <div class=\"wrap\">
-    <h1>Raspbot Camera</h1>
-    <p class=\"muted\">Streaming MJPEG from ROS 2 <code>sensor_msgs/CompressedImage</code>.</p>
-        <div class=\"videoWrap\" id=\"videoWrap\">
-            <img id=\"video\" src=\"/stream.mjpg\" alt=\"camera stream\" />
-            <canvas id=\"overlay\" class=\"overlay\"></canvas>
+    <div class=\"header\">
+      <h1>&#129302; Raspbot Dashboard</h1>
+      <p class=\"muted\">Real-time robot control &amp; sensor monitoring</p>
+    </div>
+    <div class=\"dashboard\">
+        <div class=\"card card-stream\">
+            <div class=\"videoWrap\" id=\"videoWrap\">
+                <img id=\"video\" src=\"/stream.mjpg\" alt=\"camera stream\" />
+                <canvas id=\"overlay\" class=\"overlay\"></canvas>
+            </div>
         </div>
 
         <div class=\"card\">
@@ -419,6 +439,7 @@ INDEX_HTML = """<!doctype html>
                 <div class=\"kv\">Buffer: <span id=\"micBufInfo\">-</span></div>
             </div>
         </div>
+    </div>
   </div>
 
     <script>
