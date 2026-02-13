@@ -41,7 +41,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 
-from sensor_msgs.msg import LaserScan, Range
+from sensor_msgs.msg import LaserScan, Range, Imu
 from geometry_msgs.msg import Twist
 from std_msgs.msg import Bool, Float64, String
 from std_srvs.srv import Trigger
@@ -61,6 +61,14 @@ def normalize_angle(a: float) -> float:
     return a
 
 
+def snap_to_quadrant(deg: float, threshold: float = 15.0) -> float:
+    """Snap angle to nearest 90° multiple if within threshold."""
+    for q in (-180.0, -90.0, 0.0, 90.0, 180.0):
+        if abs(deg - q) < threshold:
+            return q
+    return deg
+
+
 # ── Calibration Node ─────────────────────────────────────────────────
 
 class FrontCalibrationNode(Node):
@@ -73,14 +81,17 @@ class FrontCalibrationNode(Node):
         self.declare_parameter('scan_topic', 'scan')
         self.declare_parameter('ultrasonic_topic', 'ultrasonic/range')
         self.declare_parameter('imu_yaw_topic', 'imu/yaw_deg')
+        self.declare_parameter('imu_data_topic', 'imu/data')
         self.declare_parameter('cmd_vel_topic', 'cmd_vel')
 
         # Static calibration
-        self.declare_parameter('static_samples', 15)        # scan + US samples
-        self.declare_parameter('static_sample_interval', 0.15)  # seconds
-        self.declare_parameter('us_beam_half_deg', 15.0)     # ultrasonic half-cone
-        self.declare_parameter('us_match_tolerance_m', 0.20) # range match tolerance
+        self.declare_parameter('static_samples', 20)         # scan + US samples
+        self.declare_parameter('static_sample_interval', 0.12)  # seconds
+        self.declare_parameter('us_validation_tolerance_m', 0.30)  # US vs LiDAR
         self.declare_parameter('us_max_range', 3.0)          # ignore US > this
+        self.declare_parameter('wall_min_width_deg', 30.0)   # min angular span
+        self.declare_parameter('snap_to_90', True)           # snap to nearest 90°
+        self.declare_parameter('snap_threshold_deg', 15.0)   # snap if within this
 
         # Motion calibration
         self.declare_parameter('drive_speed', 0.10)          # m/s
@@ -103,12 +114,16 @@ class FrontCalibrationNode(Node):
         scan_topic = str(self.get_parameter('scan_topic').value)
         us_topic = str(self.get_parameter('ultrasonic_topic').value)
         imu_topic = str(self.get_parameter('imu_yaw_topic').value)
+        imu_data_topic = str(self.get_parameter('imu_data_topic').value)
         cmd_topic = str(self.get_parameter('cmd_vel_topic').value)
 
         # ── State ─────────────────────────────────────────────────────
         self._latest_scan = None       # most recent LaserScan
         self._latest_us = None         # most recent ultrasonic range (m)
         self._latest_yaw = None        # most recent IMU yaw (degrees)
+        self._latest_imu = None        # most recent Imu message
+        self._imu_accel_samples = []   # [(ax, ay, az)] during drive
+        self._collect_imu_accel = False
         self._calibrating = False
         self._lock = threading.Lock()
 
@@ -119,6 +134,8 @@ class FrontCalibrationNode(Node):
             Range, us_topic, self._on_us, 10)
         self._yaw_sub = self.create_subscription(
             Float64, imu_topic, self._on_yaw, 10)
+        self._imu_sub = self.create_subscription(
+            Imu, imu_data_topic, self._on_imu, 10)
 
         # ── Publishers ────────────────────────────────────────────────
         self._cmd_pub = self.create_publisher(Twist, cmd_topic, 10)
@@ -149,6 +166,14 @@ class FrontCalibrationNode(Node):
 
     def _on_yaw(self, msg: Float64) -> None:
         self._latest_yaw = msg.data
+
+    def _on_imu(self, msg: Imu) -> None:
+        self._latest_imu = msg
+        if self._collect_imu_accel:
+            ax = msg.linear_acceleration.x
+            ay = msg.linear_acceleration.y
+            az = msg.linear_acceleration.z
+            self._imu_accel_samples.append((ax, ay, az))
 
     def _publish_active(self) -> None:
         b = Bool()
@@ -212,13 +237,13 @@ class FrontCalibrationNode(Node):
         """Run all three calibration phases."""
         results = {}
 
-        # Phase 1: static LiDAR-ultrasonic correlation
-        self.get_logger().info('[Cal] Phase 1: Static LiDAR-ultrasonic cross-correlation')
+        # Phase 1: static LiDAR wall-perpendicular detection
+        self.get_logger().info('[Cal] Phase 1: Static wall-perpendicular detection')
         static_result = self._calibrate_static()
         results['static'] = static_result
 
-        # Phase 2: motion-based forward detection
-        self.get_logger().info('[Cal] Phase 2: Drive-and-scan forward detection')
+        # Phase 2: motion-based forward detection + IMU mount check
+        self.get_logger().info('[Cal] Phase 2: Drive-and-scan + IMU mount detection')
         motion_result = self._calibrate_motion()
         results['motion'] = motion_result
 
@@ -242,6 +267,7 @@ class FrontCalibrationNode(Node):
         results['lidar_yaw_offset_deg'] = round(lidar_yaw_offset_deg, 1)
         results['method_used'] = method_used
         results['imu_yaw_correct'] = imu_result.get('correct', None)
+        results['imu_mount'] = motion_result.get('imu_mount', {})
         results['success'] = method_used != 'none'
 
         # ── Apply corrections ─────────────────────────────────────────
@@ -294,30 +320,36 @@ class FrontCalibrationNode(Node):
         self.get_logger().info(f'[Cal] Result: {json.dumps(result, indent=2)}')
         return result
 
-    # ── Phase 1: Static LiDAR-ultrasonic correlation ──────────────────
+    # ── Phase 1: Static wall-perpendicular detection ────────────────
 
     def _calibrate_static(self) -> dict:
         """
-        Cross-correlate ultrasonic distance with LiDAR angular bins.
+        Detect the forward direction by finding the angle of closest
+        approach to the wall in the LiDAR scan.
 
-        The ultrasonic sensor is physically fixed pointing forward on the chassis.
-        By comparing its distance reading with the LiDAR's per-angle ranges,
-        we find which LiDAR angle corresponds to the physical forward direction.
+        When the robot faces a flat wall, the LiDAR angle that is
+        perpendicular to the wall surface shows the MINIMUM range.
+        This angle is the robot's true forward direction in the LiDAR
+        frame.  The ultrasonic sensor validates that a wall exists.
 
         Algorithm:
-          1. Collect N simultaneous ultrasonic + LiDAR samples.
-          2. Build a per-angle average range profile from the LiDAR data.
-          3. For each candidate angle θ ∈ [-180°, +180°):
-             - Compute the minimum LiDAR range in a ±beam_half_deg window
-               centered at θ (mimicking the ultrasonic's wide beam).
-             - Score = |min_lidar(θ) − mean_ultrasonic|
-          4. The θ with the lowest score is the offset.
+          1. Collect N LiDAR + ultrasonic samples.
+          2. Build per-angle average range profile.
+          3. Smooth the profile angularly (reduce noise).
+          4. Find the global range minimum — this is the perpendicular
+             to the wall, i.e. the forward direction.
+          5. Validate: the minimum range should roughly agree with
+             ultrasonic (within tolerance, accounting for sensor offsets).
+          6. Optionally snap to nearest 90° if close (typical mounts).
         """
         num_samples = int(self.get_parameter('static_samples').value)
         interval = float(self.get_parameter('static_sample_interval').value)
-        beam_half = float(self.get_parameter('us_beam_half_deg').value) * DEG_TO_RAD
-        tolerance = float(self.get_parameter('us_match_tolerance_m').value)
+        us_tol = float(self.get_parameter('us_validation_tolerance_m').value)
         us_max = float(self.get_parameter('us_max_range').value)
+        wall_min_width = float(
+            self.get_parameter('wall_min_width_deg').value) * DEG_TO_RAD
+        do_snap = bool(self.get_parameter('snap_to_90').value)
+        snap_thresh = float(self.get_parameter('snap_threshold_deg').value)
 
         # Validate sensor availability
         if self._latest_scan is None:
@@ -330,7 +362,6 @@ class FrontCalibrationNode(Node):
         scan_angle_ranges = {}  # angle_index → [range values]
 
         for _ in range(num_samples):
-            # Grab current readings
             us = self._latest_us
             scan = self._latest_scan
             if us is None or scan is None:
@@ -341,13 +372,11 @@ class FrontCalibrationNode(Node):
                 us_samples.append(us)
 
             # Accumulate per-angle ranges
-            angle = scan.angle_min
             for i, r in enumerate(scan.ranges):
                 if not (math.isinf(r) or math.isnan(r) or r < 0.02):
                     if i not in scan_angle_ranges:
                         scan_angle_ranges[i] = []
                     scan_angle_ranges[i].append(r)
-                angle += scan.angle_increment
 
             time.sleep(interval)
 
@@ -364,120 +393,167 @@ class FrontCalibrationNode(Node):
         if ref_scan is None:
             return {'success': False, 'error': 'Lost LiDAR data'}
 
-        # Build averaged range array
         n_rays = len(ref_scan.ranges)
+        inc = ref_scan.angle_increment
+
+        # Build averaged range array
         avg_ranges = [float('inf')] * n_rays
         for i in range(n_rays):
             if i in scan_angle_ranges and scan_angle_ranges[i]:
-                avg_ranges[i] = sum(scan_angle_ranges[i]) / len(
-                    scan_angle_ranges[i])
+                avg_ranges[i] = (
+                    sum(scan_angle_ranges[i]) / len(scan_angle_ranges[i]))
 
-        # ── Scan every candidate angle ─────────────────────────────────
-        # For each candidate "forward" direction θ, compute what the
-        # ultrasonic would read if it pointed at θ (min range in a cone).
-        best_score = float('inf')
-        best_angle = 0.0
-        candidates = []
+        # ── Angular smoothing of the range profile ─────────────────────
+        smooth_half_idx = max(1, int(5.0 * DEG_TO_RAD / inc))
+        smoothed = [float('inf')] * n_rays
+        for i in range(n_rays):
+            total = 0.0
+            weight = 0.0
+            for j in range(max(0, i - smooth_half_idx),
+                           min(n_rays, i + smooth_half_idx + 1)):
+                if not math.isinf(avg_ranges[j]):
+                    d = abs(j - i)
+                    w = 1.0 / (1.0 + d)
+                    total += avg_ranges[j] * w
+                    weight += w
+            if weight > 0:
+                smoothed[i] = total / weight
 
-        for i_center in range(n_rays):
-            center_angle = normalize_angle(
-                ref_scan.angle_min + i_center * ref_scan.angle_increment)
+        # ── Find global minimum range (wall perpendicular) ────────────
+        min_range = float('inf')
+        min_idx = 0
+        for i in range(n_rays):
+            if smoothed[i] < min_range:
+                min_range = smoothed[i]
+                min_idx = i
 
-            # Collect min range in ±beam_half cone around center_angle
-            min_in_cone = float('inf')
-            for j in range(n_rays):
-                j_angle = normalize_angle(
-                    ref_scan.angle_min + j * ref_scan.angle_increment)
-                delta = abs(normalize_angle(j_angle - center_angle))
-                if delta <= beam_half:
-                    if avg_ranges[j] < min_in_cone:
-                        min_in_cone = avg_ranges[j]
+        if math.isinf(min_range):
+            return {'success': False, 'error': 'No valid LiDAR data'}
 
-            if math.isinf(min_in_cone):
-                continue
+        min_angle_raw = normalize_angle(
+            ref_scan.angle_min + min_idx * inc)
 
-            score = abs(min_in_cone - us_mean)
-            candidates.append({
-                'angle_deg': round(center_angle * RAD_TO_DEG, 1),
-                'lidar_range': round(min_in_cone, 3),
-                'score': round(score, 4),
-            })
+        # ── Refine: parabolic interpolation around minimum ─────────────
+        refined_angle = min_angle_raw
+        if 1 <= min_idx <= n_rays - 2:
+            r_prev = smoothed[min_idx - 1]
+            r_curr = smoothed[min_idx]
+            r_next = smoothed[min_idx + 1]
+            if (not math.isinf(r_prev) and not math.isinf(r_next)
+                    and r_prev > r_curr and r_next > r_curr):
+                a_coef = (r_prev + r_next) / 2.0 - r_curr
+                b_coef = (r_next - r_prev) / 2.0
+                if abs(a_coef) > 1e-9:
+                    x_min = -b_coef / (2.0 * a_coef)
+                    x_min = max(-1.0, min(1.0, x_min))
+                    refined_angle = normalize_angle(
+                        ref_scan.angle_min + (min_idx + x_min) * inc)
 
-            if score < best_score:
-                best_score = score
-                best_angle = center_angle
+        raw_deg = round(refined_angle * RAD_TO_DEG, 1)
 
-        # Dynamic tolerance — at close range the physical mounting offset
-        # between the US sensor and LiDAR dominates, so widen tolerance.
-        effective_tol = max(tolerance, us_mean * 0.75)
+        # ── Validate: wall signature check ─────────────────────────────
+        wall_half_idx = max(1, int(wall_min_width / 2.0 / inc))
+        left_ok = False
+        right_ok = False
+        for k in range(1, wall_half_idx + 1):
+            li = min_idx - k
+            ri = min_idx + k
+            if 0 <= li < n_rays and not math.isinf(smoothed[li]):
+                if smoothed[li] > min_range * 1.01:
+                    left_ok = True
+            if 0 <= ri < n_rays and not math.isinf(smoothed[ri]):
+                if smoothed[ri] > min_range * 1.01:
+                    right_ok = True
+        wall_valid = left_ok and right_ok
 
-        matched = best_score <= effective_tol
-        match_method = 'absolute'
+        # ── Validate: ultrasonic cross-check ──────────────────────────
+        range_diff = abs(min_range - us_mean)
+        us_valid = range_diff <= us_tol
 
-        # Fallback: relative scoring — if this angle is clearly dominant
-        # (much lower score than the median), accept it.
-        if not matched and len(candidates) >= 10:
-            scores = sorted(c['score'] for c in candidates)
-            median_score = scores[len(scores) // 2]
-            if median_score > 0 and best_score < median_score * 0.4:
-                matched = True
-                match_method = 'relative'
-                self.get_logger().info(
-                    f'[Cal/static] Tolerance exceeded but best score '
-                    f'({best_score:.3f}m) is clearly dominant '
-                    f'(median={median_score:.3f}m), accepting')
+        self.get_logger().info(
+            f'[Cal/static] Wall minimum at {raw_deg}° '
+            f'(LiDAR={min_range:.3f}m, US={us_mean:.3f}m, '
+            f'diff={range_diff:.3f}m, '
+            f'wall_shape={wall_valid}, us_valid={us_valid})')
 
-        if not matched:
+        if not wall_valid:
+            indexed = [(smoothed[i], i) for i in range(n_rays)
+                       if not math.isinf(smoothed[i])]
+            indexed.sort()
+            top5 = [{
+                'angle_deg': round(normalize_angle(
+                    ref_scan.angle_min + idx * inc) * RAD_TO_DEG, 1),
+                'range_m': round(rng, 3)
+            } for rng, idx in indexed[:5]]
+
             return {
                 'success': False,
-                'error': f'No LiDAR angle matched ultrasonic range '
-                         f'({us_mean:.3f}m) within tolerance '
-                         f'({effective_tol:.3f}m). '
-                         f'Best score: {best_score:.3f}m at '
-                         f'{round(best_angle * RAD_TO_DEG, 1)}°. '
-                         f'Place the robot facing a wall 0.1–2 m away '
-                         f'and retry.',
+                'error': 'No clear wall detected — range minimum does not '
+                         'have a wall-shaped profile (increasing range on '
+                         'both sides). Ensure robot faces a flat wall.',
+                'min_angle_deg': raw_deg,
+                'min_range_m': round(min_range, 3),
                 'us_mean_m': round(us_mean, 3),
-                'best_score': round(best_score, 4),
-                'best_angle_deg': round(best_angle * RAD_TO_DEG, 1),
-                'effective_tolerance_m': round(effective_tol, 3),
+                'top5_minima': top5,
             }
 
-        offset_deg = round(best_angle * RAD_TO_DEG, 1)
+        if not us_valid:
+            return {
+                'success': False,
+                'error': f'LiDAR minimum range ({min_range:.3f}m) differs '
+                         f'from ultrasonic ({us_mean:.3f}m) by '
+                         f'{range_diff:.3f}m, exceeding tolerance '
+                         f'({us_tol:.2f}m). The minimum may not be the '
+                         f'wall in front. Try moving closer to the wall.',
+                'min_angle_deg': raw_deg,
+                'min_range_m': round(min_range, 3),
+                'us_mean_m': round(us_mean, 3),
+                'range_diff_m': round(range_diff, 3),
+            }
+
+        # ── Snap to nearest 90° if configured ─────────────────────────
+        offset_deg = raw_deg
+        snapped = False
+        if do_snap:
+            snapped_deg = snap_to_quadrant(raw_deg, snap_thresh)
+            if snapped_deg != raw_deg:
+                snapped = True
+                self.get_logger().info(
+                    f'[Cal/static] Snapping {raw_deg}° → {snapped_deg}° '
+                    f'(nearest 90° quadrant)')
+                offset_deg = snapped_deg
+
+        confidence = 'high'
+        if range_diff > us_tol * 0.5:
+            confidence = 'medium'
+
         self.get_logger().info(
-            f'[Cal/static] Ultrasonic = {us_mean:.3f}m, '
-            f'best LiDAR match at {offset_deg}° '
-            f'(score={best_score:.3f}m, method={match_method})')
+            f'[Cal/static] Forward direction: {offset_deg}° '
+            f'(raw={raw_deg}°, snapped={snapped}, '
+            f'confidence={confidence})')
 
         return {
             'success': True,
             'offset_deg': offset_deg,
+            'raw_offset_deg': raw_deg,
+            'snapped': snapped,
+            'min_range_m': round(min_range, 3),
             'us_mean_m': round(us_mean, 3),
-            'match_score': round(best_score, 4),
-            'match_method': match_method,
-            'confidence': 'high' if best_score <= tolerance else 'medium',
+            'range_diff_m': round(range_diff, 3),
+            'confidence': confidence,
             'interpretation': self._interpret_offset(offset_deg),
         }
 
-    # ── Phase 2: Motion-based forward detection ───────────────────────
+    # ── Phase 2: Motion-based forward detection + IMU mount check ────
 
     def _calibrate_motion(self) -> dict:
         """
-        Drive forward briefly, then compare before/after LiDAR scans.
+        Drive forward briefly, compare before/after LiDAR scans, and
+        monitor IMU acceleration to detect sideways mounting.
 
-        When the robot moves in the +X (forward) direction, obstacles in the
-        actual forward direction get closer (range decreases) and obstacles
-        behind get further (range increases).  The LiDAR angle showing the
-        maximum range *decrease* is the true forward direction.
-
-        Algorithm:
-          1. Collect N averaged LiDAR scans (before).
-          2. Drive at +linear.x for drive_duration seconds, then stop.
-          3. Wait for robot to settle.
-          4. Collect N averaged LiDAR scans (after).
-          5. For each angle: delta = after_range − before_range.
-          6. Smooth deltas with an angular window.
-          7. Forward = angle of most negative smoothed delta.
+        LiDAR: The angle with the largest range change indicates forward.
+        IMU: If the dominant acceleration during forward drive is on the
+        Y-axis instead of X-axis, the IMU is mounted sideways.
         """
         n_samples = int(self.get_parameter('drive_scan_samples').value)
         drive_speed = float(self.get_parameter('drive_speed').value)
@@ -485,29 +561,41 @@ class FrontCalibrationNode(Node):
         settle = float(self.get_parameter('drive_settle').value)
         smooth_half = float(
             self.get_parameter('angle_smooth_window_deg').value) * DEG_TO_RAD
+        do_snap = bool(self.get_parameter('snap_to_90').value)
+        snap_thresh = float(self.get_parameter('snap_threshold_deg').value)
 
         if self._latest_scan is None:
             return {'success': False, 'error': 'No LiDAR data'}
 
+        # ── Collect stationary IMU baseline ────────────────────────────
+        self._imu_accel_samples = []
+        self._collect_imu_accel = True
+        time.sleep(0.5)
+        baseline_samples = list(self._imu_accel_samples)
+        self._imu_accel_samples = []
+
         # ── Collect before scans ───────────────────────────────────────
         before = self._collect_averaged_scan(n_samples)
         if before is None:
+            self._collect_imu_accel = False
             return {'success': False, 'error': 'Could not collect before-scans'}
 
         # ── Determine drive direction ──────────────────────────────────
-        # If the robot is very close to a wall the collision failsafe will
-        # block forward motion.  Drive backward instead and invert the
-        # delta interpretation.
         us_range = self._latest_us
         drive_backward = (us_range is not None and us_range < 0.25)
         actual_speed = -drive_speed if drive_backward else drive_speed
         direction = 'backward' if drive_backward else 'forward'
         us_str = f'{us_range:.2f}m' if us_range is not None else 'N/A'
 
+        # ── Drive and collect IMU accel ────────────────────────────────
+        self._imu_accel_samples = []
         self.get_logger().info(
             f'[Cal/motion] Driving {direction} at {abs(actual_speed)} m/s '
             f'for {drive_dur}s (US={us_str})')
         self._drive(actual_speed, 0.0, drive_dur)
+        drive_accel_samples = list(self._imu_accel_samples)
+        self._collect_imu_accel = False
+
         time.sleep(settle)
 
         # ── Collect after scans ────────────────────────────────────────
@@ -515,18 +603,23 @@ class FrontCalibrationNode(Node):
         if after is None:
             return {'success': False, 'error': 'Could not collect after-scans'}
 
+        # ── Analyze IMU mount orientation ──────────────────────────────
+        imu_mount = self._analyze_imu_mount(
+            baseline_samples, drive_accel_samples, drive_backward)
+
         # ── Compute range deltas ───────────────────────────────────────
         ref_scan = self._latest_scan
         n_rays = len(ref_scan.ranges)
+        inc = ref_scan.angle_increment
 
         if len(before) != n_rays or len(after) != n_rays:
             return {
                 'success': False,
                 'error': f'Scan size mismatch: before={len(before)}, '
-                         f'after={len(after)}, current={n_rays}'
+                         f'after={len(after)}, current={n_rays}',
+                'imu_mount': imu_mount,
             }
 
-        # delta[i] = after[i] - before[i]; negative = objects got closer
         delta = [0.0] * n_rays
         valid = [False] * n_rays
         for i in range(n_rays):
@@ -536,45 +629,38 @@ class FrontCalibrationNode(Node):
                 valid[i] = True
 
         # ── Angular smoothing ─────────────────────────────────────────
+        smooth_half_idx = max(1, int(smooth_half / inc))
         smoothed = [0.0] * n_rays
         for i in range(n_rays):
-            center_angle = ref_scan.angle_min + i * ref_scan.angle_increment
             total = 0.0
             count = 0
-            for j in range(n_rays):
-                if not valid[j]:
-                    continue
-                j_angle = ref_scan.angle_min + j * ref_scan.angle_increment
-                if abs(normalize_angle(j_angle - center_angle)) <= smooth_half:
+            for j in range(max(0, i - smooth_half_idx),
+                           min(n_rays, i + smooth_half_idx + 1)):
+                if valid[j]:
                     total += delta[j]
                     count += 1
             if count > 0:
                 smoothed[i] = total / count
 
-        # Forward direction detection
+        # ── Find forward direction ─────────────────────────────────────
         extreme_delta = 0.0
         best_i = 0
 
         if drive_backward:
-            # Drove backward: wall in front moved further → positive delta.
-            # Forward = angle with the most POSITIVE smoothed delta.
             for i in range(n_rays):
                 if smoothed[i] > extreme_delta:
                     extreme_delta = smoothed[i]
                     best_i = i
         else:
-            # Drove forward: wall in front moved closer → negative delta.
-            # Forward = angle with the most NEGATIVE smoothed delta.
             for i in range(n_rays):
                 if smoothed[i] < extreme_delta:
                     extreme_delta = smoothed[i]
                     best_i = i
 
         fwd_angle = normalize_angle(
-            ref_scan.angle_min + best_i * ref_scan.angle_increment)
+            ref_scan.angle_min + best_i * inc)
         fwd_deg = round(fwd_angle * RAD_TO_DEG, 1)
 
-        # The delta should be meaningful (robot actually moved)
         if abs(extreme_delta) < 0.01:
             return {
                 'success': False,
@@ -582,7 +668,18 @@ class FrontCalibrationNode(Node):
                          'Ensure wheels have traction and path is clear.',
                 'max_delta_m': round(extreme_delta, 4),
                 'drove_backward': drive_backward,
+                'imu_mount': imu_mount,
             }
+
+        # Snap to quadrant
+        snapped = False
+        if do_snap:
+            snapped_deg = snap_to_quadrant(fwd_deg, snap_thresh)
+            if snapped_deg != fwd_deg:
+                snapped = True
+                self.get_logger().info(
+                    f'[Cal/motion] Snapping {fwd_deg}° → {snapped_deg}°')
+                fwd_deg = snapped_deg
 
         self.get_logger().info(
             f'[Cal/motion] Forward direction at {fwd_deg}° '
@@ -591,10 +688,116 @@ class FrontCalibrationNode(Node):
         return {
             'success': True,
             'forward_angle_deg': fwd_deg,
+            'raw_angle_deg': round(fwd_angle * RAD_TO_DEG, 1),
+            'snapped': snapped,
             'range_delta_m': round(extreme_delta, 3),
             'drove_backward': drive_backward,
+            'imu_mount': imu_mount,
             'interpretation': self._interpret_offset(fwd_deg),
         }
+
+    def _analyze_imu_mount(self, baseline: list, drive: list,
+                           drove_backward: bool) -> dict:
+        """
+        Analyze IMU acceleration during forward drive to detect
+        sideways IMU mounting.
+
+        When driving forward (+X), the IMU should show dominant
+        acceleration on its X-axis.  If the IMU board is rotated
+        (e.g. mounted sideways), the dominant axis will be different.
+
+        The RP2040 firmware auto-orients Z=up via gravity detection,
+        so only the X/Y rotation (yaw of IMU vs robot) is unknown.
+        """
+        if len(drive) < 5:
+            return {
+                'detected': False,
+                'note': 'Insufficient IMU data during drive',
+            }
+
+        # Compute mean acceleration during baseline (stationary)
+        base_ax = base_ay = 0.0
+        if len(baseline) > 3:
+            base_ax = sum(s[0] for s in baseline) / len(baseline)
+            base_ay = sum(s[1] for s in baseline) / len(baseline)
+
+        # Compute mean acceleration during drive (subtract baseline)
+        drive_ax = sum(s[0] for s in drive) / len(drive) - base_ax
+        drive_ay = sum(s[1] for s in drive) / len(drive) - base_ay
+
+        # If we drove backward, invert so the analysis is as-if forward
+        if drove_backward:
+            drive_ax = -drive_ax
+            drive_ay = -drive_ay
+
+        accel_mag = math.sqrt(drive_ax**2 + drive_ay**2)
+
+        if accel_mag < 0.05:
+            return {
+                'detected': False,
+                'note': 'Acceleration too small to determine IMU orientation '
+                        '— robot may not have moved.',
+                'accel_x': round(drive_ax, 3),
+                'accel_y': round(drive_ay, 3),
+                'accel_mag': round(accel_mag, 3),
+            }
+
+        # atan2(y, x) gives the angle of the accel vector in IMU frame
+        # If IMU is aligned with robot: angle ≈ 0° (forward = +X)
+        # If IMU is 90° CW: forward drive → +Y, so angle ≈ 90°
+        # If IMU is 90° CCW: forward drive → -Y, so angle ≈ -90°
+        imu_fwd_angle_deg = round(
+            math.atan2(drive_ay, drive_ax) * RAD_TO_DEG, 1)
+
+        sideways = abs(imu_fwd_angle_deg) > 30.0
+        snapped_mount = snap_to_quadrant(imu_fwd_angle_deg, 20.0)
+
+        recommendations = []
+        if abs(snapped_mount) > 10:
+            if abs(snapped_mount - 90) < 20:
+                recommendations.append(
+                    'IMU (RP2040) is mounted ~90° CW from robot forward. '
+                    'Set gyro_axis_map: [1, 0, 2] and '
+                    'gyro_axis_sign: [-1.0, 1.0, 1.0] in raspbot_hw.yaml, '
+                    'or set heading_offset_deg: -90.0')
+            elif abs(snapped_mount + 90) < 20:
+                recommendations.append(
+                    'IMU (RP2040) is mounted ~90° CCW from robot forward. '
+                    'Set gyro_axis_map: [1, 0, 2] and '
+                    'gyro_axis_sign: [1.0, -1.0, 1.0] in raspbot_hw.yaml, '
+                    'or set heading_offset_deg: 90.0')
+            elif abs(abs(snapped_mount) - 180) < 20:
+                recommendations.append(
+                    'IMU (RP2040) is mounted ~180° from robot forward. '
+                    'Set heading_offset_deg: 180.0 in raspbot_hw.yaml')
+            else:
+                recommendations.append(
+                    f'IMU (RP2040) appears rotated {snapped_mount:.0f}° '
+                    f'from robot forward. Set heading_offset_deg: '
+                    f'{-snapped_mount:.0f} in raspbot_hw.yaml')
+
+        result = {
+            'detected': True,
+            'sideways': sideways,
+            'imu_forward_angle_deg': imu_fwd_angle_deg,
+            'mount_rotation_deg': round(snapped_mount, 0),
+            'raw_accel_x': round(drive_ax, 3),
+            'raw_accel_y': round(drive_ay, 3),
+            'accel_mag': round(accel_mag, 3),
+            'drove_backward': drove_backward,
+            'n_samples': len(drive),
+        }
+        if recommendations:
+            result['recommendations'] = recommendations
+
+        self.get_logger().info(
+            f'[Cal/IMU mount] accel during drive: '
+            f'X={drive_ax:.3f} Y={drive_ay:.3f} m/s² '
+            f'(mag={accel_mag:.3f}), '
+            f'IMU forward at {imu_fwd_angle_deg}° in IMU frame, '
+            f'sideways={sideways}')
+
+        return result
 
     # ── Phase 3: IMU yaw sign check ──────────────────────────────────
 

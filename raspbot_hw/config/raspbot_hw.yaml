@@ -437,16 +437,19 @@ front_calibration:
     scan_topic: "scan"
     ultrasonic_topic: "ultrasonic/range"
     imu_yaw_topic: "imu/yaw_deg"
+    imu_data_topic: "imu/data"
     cmd_vel_topic: "cmd_vel"
 
-    # Static calibration (LiDAR-ultrasonic cross-correlation)
-    static_samples: 15               # number of scan+US samples
-    static_sample_interval: 0.15     # seconds between samples
-    us_beam_half_deg: 15.0           # ultrasonic beam half-angle
-    us_match_tolerance_m: 0.20       # max range difference for match
+    # Static calibration (wall-perpendicular detection)
+    static_samples: 20               # number of scan+US samples
+    static_sample_interval: 0.12     # seconds between samples
+    us_validation_tolerance_m: 0.30  # LiDAR min vs US range tolerance
     us_max_range: 3.0                # ignore US readings above this
+    wall_min_width_deg: 30.0         # min angular span for wall shape
+    snap_to_90: true                 # snap offset to nearest 90°
+    snap_threshold_deg: 15.0         # snap if within this many degrees
 
-    # Motion calibration (drive-and-scan)
+    # Motion calibration (drive-and-scan + IMU mount detection)
     drive_speed: 0.10                # m/s forward speed
     drive_duration: 0.6              # seconds to drive
     drive_settle: 0.5                # seconds to wait after stopping
