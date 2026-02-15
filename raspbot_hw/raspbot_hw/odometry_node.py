@@ -15,6 +15,13 @@ Services:
   - /odom/stop_recording    (Trigger)  stop recording waypoints
   - /odom/return_to_origin  (Trigger)  replay recorded path in reverse
   - /odom/cancel_return     (Trigger)  abort return-to-origin
+  - /odom/cancel_navigate   (Trigger)  abort navigate-to-waypoint
+
+Subscribes to:
+  - /odom/navigate_to       (Point)    navigate to map (x, y) coordinate
+
+Publishes:
+  - std_msgs/Bool on /odom/stuck       (true when stuck detected)
 """
 
 import math
@@ -26,6 +33,7 @@ from rclpy.node import Node
 from rcl_interfaces.msg import SetParametersResult
 
 from geometry_msgs.msg import (
+    Point,
     Twist,
     PoseStamped,
     TransformStamped,
@@ -33,7 +41,7 @@ from geometry_msgs.msg import (
 )
 from nav_msgs.msg import Odometry, Path
 from sensor_msgs.msg import Imu
-from std_msgs.msg import Bool, Float64
+from std_msgs.msg import Bool, Float64, String
 from std_srvs.srv import Trigger
 
 import tf2_ros
@@ -93,6 +101,12 @@ class OdometryNode(Node):
         'odom_vy_scale': '_vy_scale',
         'odom_zupt_accel_threshold': '_zupt_accel_threshold',
         'odom_zupt_gyro_threshold': '_zupt_gyro_threshold',
+        'stuck_detect_enable': '_stuck_detect_enable',
+        'stuck_timeout_sec': '_stuck_timeout_sec',
+        'stuck_accel_threshold': '_stuck_accel_threshold',
+        'stuck_gyro_threshold': '_stuck_gyro_threshold',
+        'stuck_cmd_threshold': '_stuck_cmd_threshold',
+        'navigate_timeout_sec': '_navigate_timeout_sec',
     }
 
     def __init__(self):
@@ -128,6 +142,16 @@ class OdometryNode(Node):
         self.declare_parameter('odom_zupt_accel_threshold', 0.15)  # m/s² — XY accel below this ≈ stationary
         self.declare_parameter('odom_zupt_gyro_threshold', 0.05)   # rad/s — gyro below this ≈ not rotating
 
+        # Stuck detection: robot is stuck if commanded to move but IMU shows no motion
+        self.declare_parameter('stuck_detect_enable', True)
+        self.declare_parameter('stuck_timeout_sec', 3.0)        # seconds of no motion before declaring stuck
+        self.declare_parameter('stuck_accel_threshold', 0.12)   # m/s² — below this = not moving
+        self.declare_parameter('stuck_gyro_threshold', 0.04)    # rad/s — below this = not rotating
+        self.declare_parameter('stuck_cmd_threshold', 0.03)     # min cmd_vel magnitude to consider "commanding motion"
+
+        # Navigate-to-waypoint controller (reuses return speed params)
+        self.declare_parameter('navigate_timeout_sec', 60.0)
+
         # Live path publish rate during recording
         self.declare_parameter('odom_path_publish_hz', 2.0)  # how often to publish recorded path
 
@@ -151,6 +175,14 @@ class OdometryNode(Node):
         self._zupt_accel_threshold = self.get_parameter('odom_zupt_accel_threshold').value
         self._zupt_gyro_threshold = self.get_parameter('odom_zupt_gyro_threshold').value
         self._path_publish_hz = self.get_parameter('odom_path_publish_hz').value
+
+        # Stuck detection
+        self._stuck_detect_enable = self.get_parameter('stuck_detect_enable').value
+        self._stuck_timeout_sec = self.get_parameter('stuck_timeout_sec').value
+        self._stuck_accel_threshold = self.get_parameter('stuck_accel_threshold').value
+        self._stuck_gyro_threshold = self.get_parameter('stuck_gyro_threshold').value
+        self._stuck_cmd_threshold = self.get_parameter('stuck_cmd_threshold').value
+        self._navigate_timeout_sec = self.get_parameter('navigate_timeout_sec').value
 
         # ── Pose state ────────────────────────────────────────────────
         self._x = 0.0  # metres in odom frame
@@ -176,6 +208,16 @@ class OdometryNode(Node):
         self._last_path_publish = 0.0  # monotonic time of last path publish
         self._last_status_publish = 0.0  # monotonic time of last recording/returning publish
 
+        # Stuck detection state
+        self._stuck = False
+        self._stuck_timer_start: float | None = None  # when we first saw "commanding but not moving"
+
+        # Navigate-to-waypoint state (multi-waypoint path)
+        self._navigating = False
+        self._nav_waypoints: list[tuple[float, float]] = []  # [(x,y), ...]
+        self._nav_wp_idx = 0  # current waypoint index
+        self._nav_start_time = 0.0
+
         # Path recording state
         self._recording = False
         self._waypoints: list[tuple[float, float, float]] = []  # (x, y, yaw)
@@ -195,6 +237,8 @@ class OdometryNode(Node):
         self._path_pub = self.create_publisher(Path, 'odom/path', 10)
         self._recording_pub = self.create_publisher(Bool, 'odom/recording', 10)
         self._returning_pub = self.create_publisher(Bool, 'odom/returning', 10)
+        self._stuck_pub = self.create_publisher(Bool, 'odom/stuck', 10)
+        self._nav_status_pub = self.create_publisher(String, 'odom/nav_status', 10)
 
         # TF broadcaster
         self._tf_broadcaster = tf2_ros.TransformBroadcaster(self)
@@ -213,12 +257,19 @@ class OdometryNode(Node):
         imu_yaw_topic = self.get_parameter('imu_yaw_topic').value
         self.create_subscription(Float64, imu_yaw_topic, self._on_imu_yaw, 10)
 
+        # Navigate-to-waypoint subscriptions
+        # Point: single waypoint shortcut
+        self.create_subscription(Point, 'odom/navigate_to', self._on_navigate_to, 10)
+        # Path: multi-waypoint route
+        self.create_subscription(Path, 'odom/navigate_path', self._on_navigate_path, 10)
+
         # ── Services ─────────────────────────────────────────────────
         self.create_service(Trigger, 'odom/set_origin', self._srv_set_origin)
         self.create_service(Trigger, 'odom/start_recording', self._srv_start_recording)
         self.create_service(Trigger, 'odom/stop_recording', self._srv_stop_recording)
         self.create_service(Trigger, 'odom/return_to_origin', self._srv_return_to_origin)
         self.create_service(Trigger, 'odom/cancel_return', self._srv_cancel_return)
+        self.create_service(Trigger, 'odom/cancel_navigate', self._srv_cancel_navigate)
 
         # ── Timer ─────────────────────────────────────────────────────
         period = 1.0 / max(self._publish_hz, 1.0)
@@ -295,7 +346,7 @@ class OdometryNode(Node):
             self._tick_inner(dt, now)
         except Exception as e:
             self.get_logger().error(f'[odom] tick error: {e}')
-            # Safety: if we crash during return, stop motors and abort
+            # Safety: if we crash during return/navigate, stop motors and abort
             if self._returning:
                 self._returning = False
                 self._return_cmd_pub.publish(Twist())
@@ -303,6 +354,8 @@ class OdometryNode(Node):
                 b.data = False
                 self._returning_pub.publish(b)
                 self.get_logger().warn('[odom] return aborted due to error')
+            if self._navigating:
+                self._finish_navigate('error: ' + str(e))
 
     def _tick_inner(self, dt: float, now: float) -> None:
 
@@ -312,6 +365,14 @@ class OdometryNode(Node):
         # ── Return-to-origin controller ───────────────────────────────
         if self._returning:
             self._return_tick(dt)
+
+        # ── Navigate-to-waypoint controller ───────────────────────────
+        if self._navigating:
+            self._navigate_tick(dt)
+
+        # ── Stuck detection ───────────────────────────────────────────
+        if self._stuck_detect_enable:
+            self._check_stuck(now)
 
         # ── Publish odometry ──────────────────────────────────────────
         self._publish_odom()
@@ -526,6 +587,161 @@ class OdometryNode(Node):
         b.data = False
         self._returning_pub.publish(b)
         self.get_logger().info(f'[odom] return-to-origin finished: {reason}')
+        self._publish_nav_status(f'return: {reason}')
+
+    # ── Navigate-to-waypoint controller ───────────────────────────────
+
+    def _start_nav_path(self, waypoints: list) -> None:
+        """Begin navigating a list of (x, y) waypoints."""
+        with self._lock:
+            # Cancel any ongoing return-to-origin
+            if self._returning:
+                self._returning = False
+                self._return_cmd_pub.publish(Twist())
+                b = Bool()
+                b.data = False
+                self._returning_pub.publish(b)
+                self.get_logger().info('[odom] cancelled return-to-origin for waypoint nav')
+
+            self._nav_waypoints = list(waypoints)
+            self._nav_wp_idx = 0
+            self._nav_start_time = time.time()
+            self._navigating = True
+            self._stuck = False
+            self._stuck_timer_start = None
+
+        n = len(waypoints)
+        self.get_logger().info(
+            f'[odom] navigating path with {n} waypoint(s)'
+        )
+        self._publish_nav_status('navigating')
+
+    def _on_navigate_to(self, msg: Point) -> None:
+        """Start navigating to a single map coordinate (x, y)."""
+        self._start_nav_path([(float(msg.x), float(msg.y))])
+
+    def _on_navigate_path(self, msg: Path) -> None:
+        """Start navigating a multi-waypoint path."""
+        wps = [(ps.pose.position.x, ps.pose.position.y) for ps in msg.poses]
+        if not wps:
+            self.get_logger().warn('[odom] received empty navigate path')
+            return
+        self._start_nav_path(wps)
+
+    def _navigate_tick(self, dt: float) -> None:
+        """Drive through multi-waypoint path sequentially."""
+        # Timeout
+        if (time.time() - self._nav_start_time) > self._navigate_timeout_sec:
+            self._finish_navigate('timeout')
+            return
+
+        if self._nav_wp_idx >= len(self._nav_waypoints):
+            self._finish_navigate('arrived')
+            return
+
+        tx, ty = self._nav_waypoints[self._nav_wp_idx]
+        dx = tx - self._x
+        dy = ty - self._y
+        dist = math.sqrt(dx * dx + dy * dy)
+
+        # Use tighter tolerance for intermediate waypoints, normal for final
+        is_final = (self._nav_wp_idx == len(self._nav_waypoints) - 1)
+        tolerance = self._return_goal_tolerance_m if is_final else max(self._return_goal_tolerance_m, 0.12)
+
+        if dist < tolerance:
+            self._nav_wp_idx += 1
+            n = len(self._nav_waypoints)
+            if self._nav_wp_idx >= n:
+                self._finish_navigate('arrived')
+            else:
+                self._publish_nav_status(
+                    f'navigating {self._nav_wp_idx + 1}/{n}'
+                )
+            return
+
+        # Desired heading to target
+        desired_yaw = math.atan2(dy, dx)
+        yaw_err = normalize_angle(desired_yaw - self._yaw)
+
+        cmd = Twist()
+        if abs(yaw_err) > 0.3:  # ~17 deg — rotate-in-place first
+            cmd.angular.z = clamp(
+                self._return_angular_speed * (1.0 if yaw_err > 0 else -1.0),
+                -self._return_angular_speed,
+                self._return_angular_speed,
+            )
+        else:
+            cmd.linear.x = self._return_linear_speed
+            cmd.angular.z = clamp(
+                yaw_err * 2.0,
+                -self._return_angular_speed,
+                self._return_angular_speed,
+            )
+        self._return_cmd_pub.publish(cmd)
+
+    def _finish_navigate(self, reason: str) -> None:
+        self._navigating = False
+        self._return_cmd_pub.publish(Twist())
+        self.get_logger().info(f'[odom] navigate-to-waypoint finished: {reason}')
+        self._publish_nav_status(f'nav: {reason}')
+
+    def _publish_nav_status(self, text: str) -> None:
+        msg = String()
+        msg.data = text
+        self._nav_status_pub.publish(msg)
+
+    # ── Stuck detection ───────────────────────────────────────────────
+
+    def _check_stuck(self, now: float) -> None:
+        """Detect if robot is stuck: commanding motion but IMU shows no movement."""
+        # Only relevant when auto-driving (return or navigate)
+        is_auto = self._returning or self._navigating
+        if not is_auto:
+            self._stuck_timer_start = None
+            if self._stuck:
+                self._stuck = False
+                b = Bool()
+                b.data = False
+                self._stuck_pub.publish(b)
+            return
+
+        # Are we commanding motion?
+        cmd_mag = math.sqrt(self._vx ** 2 + self._vy ** 2 + self._wz ** 2)
+        commanding_motion = cmd_mag > self._stuck_cmd_threshold
+
+        # Is IMU showing motion?
+        imu_moving = (self._imu_accel_ema > self._stuck_accel_threshold or
+                      self._imu_gyro_ema > self._stuck_gyro_threshold)
+
+        if commanding_motion and not imu_moving:
+            # Possible stuck — start or continue timer
+            if self._stuck_timer_start is None:
+                self._stuck_timer_start = now
+            elif (now - self._stuck_timer_start) >= self._stuck_timeout_sec:
+                # Confirmed stuck!
+                if not self._stuck:
+                    self._stuck = True
+                    b = Bool()
+                    b.data = True
+                    self._stuck_pub.publish(b)
+                    self.get_logger().warn(
+                        '[odom] STUCK DETECTED — cancelling auto-navigation and stopping motors'
+                    )
+                    self._publish_nav_status('STUCK — auto-cancelled')
+
+                    # Cancel whichever auto mode is active
+                    if self._returning:
+                        self._finish_return('stuck detected')
+                    if self._navigating:
+                        self._finish_navigate('stuck detected')
+        else:
+            # Moving normally — reset timer
+            self._stuck_timer_start = None
+            if self._stuck:
+                self._stuck = False
+                b = Bool()
+                b.data = False
+                self._stuck_pub.publish(b)
 
     # ── Service handlers ──────────────────────────────────────────────
 
@@ -543,6 +759,9 @@ class OdometryNode(Node):
             self._last_wp_yaw = 0.0
             if self._returning:
                 self._returning = False
+                self._return_cmd_pub.publish(Twist())
+            if self._navigating:
+                self._navigating = False
                 self._return_cmd_pub.publish(Twist())
         resp.success = True
         resp.message = 'Origin set to current position'
@@ -651,6 +870,23 @@ class OdometryNode(Node):
         b = Bool()
         b.data = False
         self._returning_pub.publish(b)
+        return resp
+
+    def _srv_cancel_navigate(self, req, resp):
+        """Abort navigate-to-waypoint."""
+        with self._lock:
+            if not self._navigating:
+                resp.success = False
+                resp.message = 'Not currently navigating'
+                return resp
+            self._navigating = False
+            self._nav_waypoints.clear()
+            self._nav_wp_idx = 0
+            self._return_cmd_pub.publish(Twist())
+        resp.success = True
+        resp.message = 'Navigation cancelled'
+        self.get_logger().info('[odom] navigate path cancelled by user')
+        self._publish_nav_status('nav cancelled')
         return resp
 
 

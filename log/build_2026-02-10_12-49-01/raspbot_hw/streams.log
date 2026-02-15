@@ -1,0 +1,79 @@
+[3.599s] Invoking command in '/home/jedld/ros2_foxy/src/raspbot_ros2/raspbot_hw': PYTHONPATH=/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../build/raspbot_hw build --build-base /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/build install --record /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/install.log --single-version-externally-managed install_data
+[4.270s] running egg_info
+[4.270s] creating ../build/raspbot_hw/raspbot_hw.egg-info
+[4.305s] writing ../build/raspbot_hw/raspbot_hw.egg-info/PKG-INFO
+[4.306s] writing dependency_links to ../build/raspbot_hw/raspbot_hw.egg-info/dependency_links.txt
+[4.306s] writing entry points to ../build/raspbot_hw/raspbot_hw.egg-info/entry_points.txt
+[4.306s] writing requirements to ../build/raspbot_hw/raspbot_hw.egg-info/requires.txt
+[4.306s] writing top-level names to ../build/raspbot_hw/raspbot_hw.egg-info/top_level.txt
+[4.306s] writing manifest file '../build/raspbot_hw/raspbot_hw.egg-info/SOURCES.txt'
+[4.409s] reading manifest file '../build/raspbot_hw/raspbot_hw.egg-info/SOURCES.txt'
+[4.410s] writing manifest file '../build/raspbot_hw/raspbot_hw.egg-info/SOURCES.txt'
+[4.410s] running build
+[4.411s] running build_py
+[4.411s] creating /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/build
+[4.411s] creating /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/build/lib
+[4.411s] creating /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/build/lib/raspbot_hw
+[4.411s] copying raspbot_hw/imu_serial_node.py -> /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/build/lib/raspbot_hw
+[4.411s] copying raspbot_hw/camera_gimbal_node.py -> /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/build/lib/raspbot_hw
+[4.413s] copying raspbot_hw/ultrasonic_node.py -> /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/build/lib/raspbot_hw
+[4.414s] copying raspbot_hw/motor_driver_node.py -> /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/build/lib/raspbot_hw
+[4.414s] copying raspbot_hw/i2c_car.py -> /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/build/lib/raspbot_hw
+[4.414s] copying raspbot_hw/opencv_camera_node.py -> /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/build/lib/raspbot_hw
+[4.415s] copying raspbot_hw/__init__.py -> /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/build/lib/raspbot_hw
+[4.415s] copying raspbot_hw/oled_node.py -> /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/build/lib/raspbot_hw
+[4.416s] copying raspbot_hw/motor_id_test_node.py -> /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/build/lib/raspbot_hw
+[4.417s] copying raspbot_hw/gpio_sensors_node.py -> /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/build/lib/raspbot_hw
+[4.417s] copying raspbot_hw/gpio_backend.py -> /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/build/lib/raspbot_hw
+[4.418s] copying raspbot_hw/lightbar_node.py -> /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/build/lib/raspbot_hw
+[4.419s] running install
+[4.432s] running install_lib
+[4.474s] creating /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/python3.12/site-packages/raspbot_hw
+[4.475s] copying /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/build/lib/raspbot_hw/imu_serial_node.py -> /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/python3.12/site-packages/raspbot_hw
+[4.475s] copying /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/build/lib/raspbot_hw/camera_gimbal_node.py -> /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/python3.12/site-packages/raspbot_hw
+[4.475s] copying /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/build/lib/raspbot_hw/ultrasonic_node.py -> /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/python3.12/site-packages/raspbot_hw
+[4.475s] copying /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/build/lib/raspbot_hw/motor_driver_node.py -> /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/python3.12/site-packages/raspbot_hw
+[4.475s] copying /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/build/lib/raspbot_hw/i2c_car.py -> /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/python3.12/site-packages/raspbot_hw
+[4.475s] copying /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/build/lib/raspbot_hw/opencv_camera_node.py -> /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/python3.12/site-packages/raspbot_hw
+[4.475s] copying /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/build/lib/raspbot_hw/__init__.py -> /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/python3.12/site-packages/raspbot_hw
+[4.476s] copying /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/build/lib/raspbot_hw/oled_node.py -> /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/python3.12/site-packages/raspbot_hw
+[4.476s] copying /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/build/lib/raspbot_hw/motor_id_test_node.py -> /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/python3.12/site-packages/raspbot_hw
+[4.477s] copying /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/build/lib/raspbot_hw/gpio_sensors_node.py -> /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/python3.12/site-packages/raspbot_hw
+[4.477s] copying /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/build/lib/raspbot_hw/gpio_backend.py -> /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/python3.12/site-packages/raspbot_hw
+[4.477s] copying /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/build/lib/raspbot_hw/lightbar_node.py -> /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/python3.12/site-packages/raspbot_hw
+[4.479s] byte-compiling /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/python3.12/site-packages/raspbot_hw/imu_serial_node.py to imu_serial_node.cpython-312.pyc
+[4.483s] byte-compiling /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/python3.12/site-packages/raspbot_hw/camera_gimbal_node.py to camera_gimbal_node.cpython-312.pyc
+[4.486s] byte-compiling /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/python3.12/site-packages/raspbot_hw/ultrasonic_node.py to ultrasonic_node.cpython-312.pyc
+[4.488s] byte-compiling /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/python3.12/site-packages/raspbot_hw/motor_driver_node.py to motor_driver_node.cpython-312.pyc
+[4.496s] byte-compiling /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/python3.12/site-packages/raspbot_hw/i2c_car.py to i2c_car.cpython-312.pyc
+[4.499s] byte-compiling /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/python3.12/site-packages/raspbot_hw/opencv_camera_node.py to opencv_camera_node.cpython-312.pyc
+[4.500s] byte-compiling /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/python3.12/site-packages/raspbot_hw/__init__.py to __init__.cpython-312.pyc
+[4.500s] byte-compiling /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/python3.12/site-packages/raspbot_hw/oled_node.py to oled_node.cpython-312.pyc
+[4.506s] byte-compiling /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/python3.12/site-packages/raspbot_hw/motor_id_test_node.py to motor_id_test_node.cpython-312.pyc
+[4.508s] byte-compiling /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/python3.12/site-packages/raspbot_hw/gpio_sensors_node.py to gpio_sensors_node.cpython-312.pyc
+[4.509s] byte-compiling /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/python3.12/site-packages/raspbot_hw/gpio_backend.py to gpio_backend.cpython-312.pyc
+[4.512s] byte-compiling /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/python3.12/site-packages/raspbot_hw/lightbar_node.py to lightbar_node.cpython-312.pyc
+[4.517s] running install_data
+[4.517s] creating /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/share/ament_index
+[4.517s] creating /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/share/ament_index/resource_index
+[4.518s] creating /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/share/ament_index/resource_index/packages
+[4.518s] copying resource/raspbot_hw -> /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/share/ament_index/resource_index/packages
+[4.518s] copying package.xml -> /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/share/raspbot_hw
+[4.518s] creating /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/share/raspbot_hw/config
+[4.518s] copying config/raspbot_hw.yaml -> /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/share/raspbot_hw/config
+[4.518s] creating /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/share/raspbot_hw/launch
+[4.518s] copying launch/hw.launch.py -> /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/share/raspbot_hw/launch
+[4.520s] running install_egg_info
+[4.567s] Copying ../build/raspbot_hw/raspbot_hw.egg-info to /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/python3.12/site-packages/raspbot_hw-0.1.0-py3.12.egg-info
+[4.568s] running install_scripts
+[4.819s] Installing camera_gimbal script to /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/raspbot_hw
+[4.819s] Installing gpio_sensors script to /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/raspbot_hw
+[4.819s] Installing imu_serial script to /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/raspbot_hw
+[4.820s] Installing lightbar script to /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/raspbot_hw
+[4.820s] Installing motor_driver script to /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/raspbot_hw
+[4.820s] Installing motor_id_test script to /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/raspbot_hw
+[4.820s] Installing oled script to /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/raspbot_hw
+[4.820s] Installing opencv_camera script to /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/raspbot_hw
+[4.820s] Installing ultrasonic script to /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/raspbot_hw
+[4.820s] writing list of installed files to '/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/install.log'
+[4.933s] Invoked command in '/home/jedld/ros2_foxy/src/raspbot_ros2/raspbot_hw' returned '0': PYTHONPATH=/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../build/raspbot_hw build --build-base /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/build install --record /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/install.log --single-version-externally-managed install_data

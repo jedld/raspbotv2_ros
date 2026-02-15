@@ -1,0 +1,27 @@
+[2.352s] Invoking command in '/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_bringup': AMENT_PREFIX_PATH=/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video:/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw:${AMENT_PREFIX_PATH} PYTHONPATH=/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_bringup/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_bringup/lib/python3.12/site-packages:/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video:/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/lib/python3.12/site-packages:/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw:/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_bringup/build --no-deps symlink_data
+[3.124s] running develop
+[3.506s] running egg_info
+[3.506s] creating raspbot_bringup.egg-info
+[3.543s] writing raspbot_bringup.egg-info/PKG-INFO
+[3.543s] writing dependency_links to raspbot_bringup.egg-info/dependency_links.txt
+[3.543s] writing entry points to raspbot_bringup.egg-info/entry_points.txt
+[3.543s] writing requirements to raspbot_bringup.egg-info/requires.txt
+[3.543s] writing top-level names to raspbot_bringup.egg-info/top_level.txt
+[3.544s] writing manifest file 'raspbot_bringup.egg-info/SOURCES.txt'
+[3.621s] reading manifest file 'raspbot_bringup.egg-info/SOURCES.txt'
+[3.622s] writing manifest file 'raspbot_bringup.egg-info/SOURCES.txt'
+[3.667s] running build_ext
+[3.667s] Creating /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_bringup/lib/python3.12/site-packages/raspbot-bringup.egg-link (link to .)
+[3.668s] Installing startup_sound script to /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_bringup/lib/raspbot_bringup
+[3.669s] 
+[3.669s] Installed /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_bringup
+[3.669s] running symlink_data
+[3.669s] creating /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_bringup/share/ament_index
+[3.669s] creating /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_bringup/share/ament_index/resource_index
+[3.669s] creating /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_bringup/share/ament_index/resource_index/packages
+[3.670s] symbolically linking /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_bringup/resource/raspbot_bringup -> /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_bringup/share/ament_index/resource_index/packages
+[3.670s] symbolically linking /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_bringup/package.xml -> /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_bringup/share/raspbot_bringup
+[3.670s] creating /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_bringup/share/raspbot_bringup/launch
+[3.670s] symbolically linking /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_bringup/launch/bringup.launch.py -> /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_bringup/share/raspbot_bringup/launch
+[3.670s] symbolically linking /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_bringup/README.md -> /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_bringup/share/raspbot_bringup
+[3.804s] Invoked command in '/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_bringup' returned '0': AMENT_PREFIX_PATH=/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video:/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw:${AMENT_PREFIX_PATH} PYTHONPATH=/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_bringup/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_bringup/lib/python3.12/site-packages:/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video:/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/lib/python3.12/site-packages:/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw:/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_bringup/build --no-deps symlink_data

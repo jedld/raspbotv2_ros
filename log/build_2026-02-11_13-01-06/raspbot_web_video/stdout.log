@@ -1,0 +1,33 @@
+running develop
+Removing /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/lib/python3.12/site-packages/raspbot-web-video.egg-link (link to .)
+running egg_info
+writing ../build/raspbot_web_video/raspbot_web_video.egg-info/PKG-INFO
+writing dependency_links to ../build/raspbot_web_video/raspbot_web_video.egg-info/dependency_links.txt
+writing entry points to ../build/raspbot_web_video/raspbot_web_video.egg-info/entry_points.txt
+writing requirements to ../build/raspbot_web_video/raspbot_web_video.egg-info/requires.txt
+writing top-level names to ../build/raspbot_web_video/raspbot_web_video.egg-info/top_level.txt
+reading manifest file '../build/raspbot_web_video/raspbot_web_video.egg-info/SOURCES.txt'
+writing manifest file '../build/raspbot_web_video/raspbot_web_video.egg-info/SOURCES.txt'
+running build
+running build_py
+creating /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video/build
+creating /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video/build/lib
+creating /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video/build/lib/raspbot_web_video
+copying raspbot_web_video/web_video_server.py -> /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video/build/lib/raspbot_web_video
+copying raspbot_web_video/__init__.py -> /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video/build/lib/raspbot_web_video
+running install
+running install_lib
+creating /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/lib/python3.12/site-packages/raspbot_web_video
+copying /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video/build/lib/raspbot_web_video/web_video_server.py -> /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/lib/python3.12/site-packages/raspbot_web_video
+copying /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video/build/lib/raspbot_web_video/__init__.py -> /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/lib/python3.12/site-packages/raspbot_web_video
+byte-compiling /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/lib/python3.12/site-packages/raspbot_web_video/web_video_server.py to web_video_server.cpython-312.pyc
+byte-compiling /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/lib/python3.12/site-packages/raspbot_web_video/__init__.py to __init__.cpython-312.pyc
+running install_data
+copying resource/raspbot_web_video -> /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/share/ament_index/resource_index/packages
+copying package.xml -> /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/share/raspbot_web_video
+copying launch/web_video.launch.py -> /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/share/raspbot_web_video/launch
+running install_egg_info
+Copying ../build/raspbot_web_video/raspbot_web_video.egg-info to /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/lib/python3.12/site-packages/raspbot_web_video-0.1.0-py3.12.egg-info
+running install_scripts
+Installing web_video script to /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/lib/raspbot_web_video
+writing list of installed files to '/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video/install.log'

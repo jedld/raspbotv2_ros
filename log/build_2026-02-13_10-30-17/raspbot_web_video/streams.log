@@ -1,0 +1,17 @@
+[6.355s] Invoking command in '/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video': PYTHONPATH=/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video/build --no-deps symlink_data
+[7.833s] running develop
+[8.584s] running egg_info
+[8.688s] writing raspbot_web_video.egg-info/PKG-INFO
+[8.694s] writing dependency_links to raspbot_web_video.egg-info/dependency_links.txt
+[8.696s] writing entry points to raspbot_web_video.egg-info/entry_points.txt
+[8.699s] writing requirements to raspbot_web_video.egg-info/requires.txt
+[8.705s] writing top-level names to raspbot_web_video.egg-info/top_level.txt
+[8.859s] reading manifest file 'raspbot_web_video.egg-info/SOURCES.txt'
+[8.864s] writing manifest file 'raspbot_web_video.egg-info/SOURCES.txt'
+[8.935s] running build_ext
+[8.939s] Creating /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/lib/python3.12/site-packages/raspbot-web-video.egg-link (link to .)
+[8.943s] Installing web_video script to /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/lib/raspbot_web_video
+[8.950s] 
+[8.950s] Installed /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video
+[8.950s] running symlink_data
+[9.172s] Invoked command in '/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video' returned '0': PYTHONPATH=/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video/build --no-deps symlink_data

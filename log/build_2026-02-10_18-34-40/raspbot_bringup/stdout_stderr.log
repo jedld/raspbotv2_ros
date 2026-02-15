@@ -1,0 +1,25 @@
+running develop
+running egg_info
+creating raspbot_bringup.egg-info
+writing raspbot_bringup.egg-info/PKG-INFO
+writing dependency_links to raspbot_bringup.egg-info/dependency_links.txt
+writing entry points to raspbot_bringup.egg-info/entry_points.txt
+writing requirements to raspbot_bringup.egg-info/requires.txt
+writing top-level names to raspbot_bringup.egg-info/top_level.txt
+writing manifest file 'raspbot_bringup.egg-info/SOURCES.txt'
+reading manifest file 'raspbot_bringup.egg-info/SOURCES.txt'
+writing manifest file 'raspbot_bringup.egg-info/SOURCES.txt'
+running build_ext
+Creating /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_bringup/lib/python3.12/site-packages/raspbot-bringup.egg-link (link to .)
+Installing startup_sound script to /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_bringup/lib/raspbot_bringup
+
+Installed /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_bringup
+running symlink_data
+creating /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_bringup/share/ament_index
+creating /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_bringup/share/ament_index/resource_index
+creating /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_bringup/share/ament_index/resource_index/packages
+symbolically linking /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_bringup/resource/raspbot_bringup -> /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_bringup/share/ament_index/resource_index/packages
+symbolically linking /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_bringup/package.xml -> /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_bringup/share/raspbot_bringup
+creating /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_bringup/share/raspbot_bringup/launch
+symbolically linking /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_bringup/launch/bringup.launch.py -> /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_bringup/share/raspbot_bringup/launch
+symbolically linking /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_bringup/README.md -> /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_bringup/share/raspbot_bringup

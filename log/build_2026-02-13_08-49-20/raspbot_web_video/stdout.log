@@ -1,0 +1,15 @@
+running develop
+running egg_info
+writing raspbot_web_video.egg-info/PKG-INFO
+writing dependency_links to raspbot_web_video.egg-info/dependency_links.txt
+writing entry points to raspbot_web_video.egg-info/entry_points.txt
+writing requirements to raspbot_web_video.egg-info/requires.txt
+writing top-level names to raspbot_web_video.egg-info/top_level.txt
+reading manifest file 'raspbot_web_video.egg-info/SOURCES.txt'
+writing manifest file 'raspbot_web_video.egg-info/SOURCES.txt'
+running build_ext
+Creating /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/lib/python3.12/site-packages/raspbot-web-video.egg-link (link to .)
+Installing web_video script to /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/lib/raspbot_web_video
+
+Installed /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video
+running symlink_data

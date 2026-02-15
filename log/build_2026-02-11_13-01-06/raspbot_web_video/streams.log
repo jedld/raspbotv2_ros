@@ -1,0 +1,37 @@
+[8.588s] Invoking command in '/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video': PYTHONPATH=/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --uninstall --editable --build-directory /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video/build
+[9.985s] running develop
+[10.578s] Removing /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/lib/python3.12/site-packages/raspbot-web-video.egg-link (link to .)
+[10.763s] Invoked command in '/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video' returned '0': PYTHONPATH=/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --uninstall --editable --build-directory /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video/build
+[10.807s] Invoking command in '/home/jedld/ros2_foxy/src/raspbot_ros2/raspbot_web_video': PYTHONPATH=/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../build/raspbot_web_video build --build-base /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video/build install --record /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video/install.log --single-version-externally-managed install_data --force
+[11.996s] running egg_info
+[12.107s] writing ../build/raspbot_web_video/raspbot_web_video.egg-info/PKG-INFO
+[12.113s] writing dependency_links to ../build/raspbot_web_video/raspbot_web_video.egg-info/dependency_links.txt
+[12.119s] writing entry points to ../build/raspbot_web_video/raspbot_web_video.egg-info/entry_points.txt
+[12.121s] writing requirements to ../build/raspbot_web_video/raspbot_web_video.egg-info/requires.txt
+[12.121s] writing top-level names to ../build/raspbot_web_video/raspbot_web_video.egg-info/top_level.txt
+[12.264s] reading manifest file '../build/raspbot_web_video/raspbot_web_video.egg-info/SOURCES.txt'
+[12.268s] writing manifest file '../build/raspbot_web_video/raspbot_web_video.egg-info/SOURCES.txt'
+[12.268s] running build
+[12.268s] running build_py
+[12.268s] creating /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video/build
+[12.268s] creating /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video/build/lib
+[12.270s] creating /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video/build/lib/raspbot_web_video
+[12.270s] copying raspbot_web_video/web_video_server.py -> /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video/build/lib/raspbot_web_video
+[12.275s] copying raspbot_web_video/__init__.py -> /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video/build/lib/raspbot_web_video
+[12.276s] running install
+[12.296s] running install_lib
+[12.367s] creating /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/lib/python3.12/site-packages/raspbot_web_video
+[12.369s] copying /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video/build/lib/raspbot_web_video/web_video_server.py -> /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/lib/python3.12/site-packages/raspbot_web_video
+[12.369s] copying /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video/build/lib/raspbot_web_video/__init__.py -> /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/lib/python3.12/site-packages/raspbot_web_video
+[12.374s] byte-compiling /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/lib/python3.12/site-packages/raspbot_web_video/web_video_server.py to web_video_server.cpython-312.pyc
+[12.424s] byte-compiling /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/lib/python3.12/site-packages/raspbot_web_video/__init__.py to __init__.cpython-312.pyc
+[12.424s] running install_data
+[12.425s] copying resource/raspbot_web_video -> /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/share/ament_index/resource_index/packages
+[12.428s] copying package.xml -> /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/share/raspbot_web_video
+[12.430s] copying launch/web_video.launch.py -> /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/share/raspbot_web_video/launch
+[12.435s] running install_egg_info
+[12.512s] Copying ../build/raspbot_web_video/raspbot_web_video.egg-info to /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/lib/python3.12/site-packages/raspbot_web_video-0.1.0-py3.12.egg-info
+[12.534s] running install_scripts
+[12.854s] Installing web_video script to /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/lib/raspbot_web_video
+[12.854s] writing list of installed files to '/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video/install.log'
+[13.039s] Invoked command in '/home/jedld/ros2_foxy/src/raspbot_ros2/raspbot_web_video' returned '0': PYTHONPATH=/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../build/raspbot_web_video build --build-base /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video/build install --record /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video/install.log --single-version-externally-managed install_data --force

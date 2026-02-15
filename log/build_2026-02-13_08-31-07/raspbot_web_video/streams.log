@@ -1,0 +1,20 @@
+[4.291s] Invoking command in '/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video': PYTHONPATH=/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video/build --no-deps symlink_data --force
+[5.581s] running develop
+[6.207s] running egg_info
+[6.309s] writing raspbot_web_video.egg-info/PKG-INFO
+[6.310s] writing dependency_links to raspbot_web_video.egg-info/dependency_links.txt
+[6.315s] writing entry points to raspbot_web_video.egg-info/entry_points.txt
+[6.316s] writing requirements to raspbot_web_video.egg-info/requires.txt
+[6.316s] writing top-level names to raspbot_web_video.egg-info/top_level.txt
+[6.467s] reading manifest file 'raspbot_web_video.egg-info/SOURCES.txt'
+[6.470s] writing manifest file 'raspbot_web_video.egg-info/SOURCES.txt'
+[6.552s] running build_ext
+[6.552s] Creating /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/lib/python3.12/site-packages/raspbot-web-video.egg-link (link to .)
+[6.552s] Installing web_video script to /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/lib/raspbot_web_video
+[6.552s] 
+[6.552s] Installed /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video
+[6.560s] running symlink_data
+[6.561s] symbolically linking /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video/resource/raspbot_web_video -> /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/share/ament_index/resource_index/packages
+[6.561s] symbolically linking /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video/package.xml -> /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/share/raspbot_web_video
+[6.561s] symbolically linking /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video/launch/web_video.launch.py -> /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/share/raspbot_web_video/launch
+[6.770s] Invoked command in '/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video' returned '0': PYTHONPATH=/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video/build --no-deps symlink_data --force

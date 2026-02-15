@@ -1,0 +1,323 @@
+[0.606s] DEBUG:colcon:Command line arguments: ['/usr/bin/colcon', 'build', '--packages-select', 'raspbot_hw', 'raspbot_web_video', 'raspbot_bringup', '--symlink-install']
+[0.606s] DEBUG:colcon:Parsed command line arguments: Namespace(log_base=None, log_level=None, verb_name='build', build_base='build', install_base='install', merge_install=False, symlink_install=True, test_result_base=None, continue_on_error=False, executor='parallel', parallel_workers=4, event_handlers=None, ignore_user_meta=False, metas=['./colcon.meta'], base_paths=['.'], packages_ignore=None, packages_ignore_regex=None, paths=None, packages_up_to=None, packages_up_to_regex=None, packages_above=None, packages_above_and_dependencies=None, packages_above_depth=None, packages_select_by_dep=None, packages_skip_by_dep=None, packages_skip_up_to=None, packages_select_build_failed=False, packages_skip_build_finished=False, packages_select_test_failures=False, packages_skip_test_passed=False, packages_select=['raspbot_hw', 'raspbot_web_video', 'raspbot_bringup'], packages_skip=None, packages_select_regex=None, packages_skip_regex=None, packages_start=None, packages_end=None, allow_overriding=[], cmake_args=None, cmake_target=None, cmake_target_skip_unavailable=False, cmake_clean_cache=False, cmake_clean_first=False, cmake_force_configure=False, ament_cmake_args=None, catkin_cmake_args=None, catkin_skip_building_tests=False, mixin_files=None, mixin=None, verb_parser=<colcon_mixin.mixin.mixin_argument.MixinArgumentDecorator object at 0xffff92a6d610>, verb_extension=<colcon_core.verb.build.BuildVerb object at 0xffff92c148f0>, main=<bound method BuildVerb.main of <colcon_core.verb.build.BuildVerb object at 0xffff92c148f0>>, mixin_verb=('build',))
+[0.712s] Level 1:colcon.colcon_core.package_discovery:discover_packages(colcon_meta) check parameters
+[0.712s] Level 1:colcon.colcon_core.package_discovery:discover_packages(recursive) check parameters
+[0.712s] Level 1:colcon.colcon_core.package_discovery:discover_packages(ignore) check parameters
+[0.713s] Level 1:colcon.colcon_core.package_discovery:discover_packages(path) check parameters
+[0.713s] Level 1:colcon.colcon_core.package_discovery:discover_packages(colcon_meta) discover
+[0.713s] Level 1:colcon.colcon_core.package_discovery:discover_packages(recursive) discover
+[0.713s] INFO:colcon.colcon_core.package_discovery:Crawling recursively for packages in '/home/jedld/ros2_foxy/src/raspbot_ros2'
+[0.713s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extensions ['ignore', 'ignore_ament_install']
+[0.713s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'ignore'
+[0.713s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'ignore_ament_install'
+[0.713s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extensions ['colcon_pkg']
+[0.713s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'colcon_pkg'
+[0.713s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extensions ['colcon_meta']
+[0.713s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'colcon_meta'
+[0.713s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extensions ['ros']
+[0.713s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'ros'
+[0.796s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extensions ['cmake', 'python']
+[0.796s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'cmake'
+[0.796s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'python'
+[0.796s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extensions ['python_setup_py']
+[0.796s] Level 1:colcon.colcon_core.package_identification:_identify(.) by extension 'python_setup_py'
+[0.797s] Level 1:colcon.colcon_core.package_identification:_identify(bin) by extensions ['ignore', 'ignore_ament_install']
+[0.797s] Level 1:colcon.colcon_core.package_identification:_identify(bin) by extension 'ignore'
+[0.797s] Level 1:colcon.colcon_core.package_identification:_identify(bin) by extension 'ignore_ament_install'
+[0.797s] Level 1:colcon.colcon_core.package_identification:_identify(bin) by extensions ['colcon_pkg']
+[0.797s] Level 1:colcon.colcon_core.package_identification:_identify(bin) by extension 'colcon_pkg'
+[0.798s] Level 1:colcon.colcon_core.package_identification:_identify(bin) by extensions ['colcon_meta']
+[0.798s] Level 1:colcon.colcon_core.package_identification:_identify(bin) by extension 'colcon_meta'
+[0.798s] Level 1:colcon.colcon_core.package_identification:_identify(bin) by extensions ['ros']
+[0.798s] Level 1:colcon.colcon_core.package_identification:_identify(bin) by extension 'ros'
+[0.798s] Level 1:colcon.colcon_core.package_identification:_identify(bin) by extensions ['cmake', 'python']
+[0.798s] Level 1:colcon.colcon_core.package_identification:_identify(bin) by extension 'cmake'
+[0.798s] Level 1:colcon.colcon_core.package_identification:_identify(bin) by extension 'python'
+[0.798s] Level 1:colcon.colcon_core.package_identification:_identify(bin) by extensions ['python_setup_py']
+[0.798s] Level 1:colcon.colcon_core.package_identification:_identify(bin) by extension 'python_setup_py'
+[0.799s] Level 1:colcon.colcon_core.package_identification:_identify(build) by extensions ['ignore', 'ignore_ament_install']
+[0.799s] Level 1:colcon.colcon_core.package_identification:_identify(build) by extension 'ignore'
+[0.799s] Level 1:colcon.colcon_core.package_identification:_identify(build) ignored
+[0.799s] Level 1:colcon.colcon_core.package_identification:_identify(firmware) by extensions ['ignore', 'ignore_ament_install']
+[0.799s] Level 1:colcon.colcon_core.package_identification:_identify(firmware) by extension 'ignore'
+[0.799s] Level 1:colcon.colcon_core.package_identification:_identify(firmware) by extension 'ignore_ament_install'
+[0.799s] Level 1:colcon.colcon_core.package_identification:_identify(firmware) by extensions ['colcon_pkg']
+[0.799s] Level 1:colcon.colcon_core.package_identification:_identify(firmware) by extension 'colcon_pkg'
+[0.799s] Level 1:colcon.colcon_core.package_identification:_identify(firmware) by extensions ['colcon_meta']
+[0.799s] Level 1:colcon.colcon_core.package_identification:_identify(firmware) by extension 'colcon_meta'
+[0.799s] Level 1:colcon.colcon_core.package_identification:_identify(firmware) by extensions ['ros']
+[0.799s] Level 1:colcon.colcon_core.package_identification:_identify(firmware) by extension 'ros'
+[0.800s] Level 1:colcon.colcon_core.package_identification:_identify(firmware) by extensions ['cmake', 'python']
+[0.800s] Level 1:colcon.colcon_core.package_identification:_identify(firmware) by extension 'cmake'
+[0.800s] Level 1:colcon.colcon_core.package_identification:_identify(firmware) by extension 'python'
+[0.800s] Level 1:colcon.colcon_core.package_identification:_identify(firmware) by extensions ['python_setup_py']
+[0.800s] Level 1:colcon.colcon_core.package_identification:_identify(firmware) by extension 'python_setup_py'
+[0.800s] Level 1:colcon.colcon_core.package_identification:_identify(firmware/arduino_nano_rp2040) by extensions ['ignore', 'ignore_ament_install']
+[0.800s] Level 1:colcon.colcon_core.package_identification:_identify(firmware/arduino_nano_rp2040) by extension 'ignore'
+[0.800s] Level 1:colcon.colcon_core.package_identification:_identify(firmware/arduino_nano_rp2040) by extension 'ignore_ament_install'
+[0.800s] Level 1:colcon.colcon_core.package_identification:_identify(firmware/arduino_nano_rp2040) by extensions ['colcon_pkg']
+[0.800s] Level 1:colcon.colcon_core.package_identification:_identify(firmware/arduino_nano_rp2040) by extension 'colcon_pkg'
+[0.800s] Level 1:colcon.colcon_core.package_identification:_identify(firmware/arduino_nano_rp2040) by extensions ['colcon_meta']
+[0.800s] Level 1:colcon.colcon_core.package_identification:_identify(firmware/arduino_nano_rp2040) by extension 'colcon_meta'
+[0.800s] Level 1:colcon.colcon_core.package_identification:_identify(firmware/arduino_nano_rp2040) by extensions ['ros']
+[0.800s] Level 1:colcon.colcon_core.package_identification:_identify(firmware/arduino_nano_rp2040) by extension 'ros'
+[0.801s] Level 1:colcon.colcon_core.package_identification:_identify(firmware/arduino_nano_rp2040) by extensions ['cmake', 'python']
+[0.801s] Level 1:colcon.colcon_core.package_identification:_identify(firmware/arduino_nano_rp2040) by extension 'cmake'
+[0.801s] Level 1:colcon.colcon_core.package_identification:_identify(firmware/arduino_nano_rp2040) by extension 'python'
+[0.801s] Level 1:colcon.colcon_core.package_identification:_identify(firmware/arduino_nano_rp2040) by extensions ['python_setup_py']
+[0.801s] Level 1:colcon.colcon_core.package_identification:_identify(firmware/arduino_nano_rp2040) by extension 'python_setup_py'
+[0.801s] Level 1:colcon.colcon_core.package_identification:_identify(firmware/arduino_nano_rp2040/raspbot_imu_bridge) by extensions ['ignore', 'ignore_ament_install']
+[0.801s] Level 1:colcon.colcon_core.package_identification:_identify(firmware/arduino_nano_rp2040/raspbot_imu_bridge) by extension 'ignore'
+[0.801s] Level 1:colcon.colcon_core.package_identification:_identify(firmware/arduino_nano_rp2040/raspbot_imu_bridge) by extension 'ignore_ament_install'
+[0.801s] Level 1:colcon.colcon_core.package_identification:_identify(firmware/arduino_nano_rp2040/raspbot_imu_bridge) by extensions ['colcon_pkg']
+[0.801s] Level 1:colcon.colcon_core.package_identification:_identify(firmware/arduino_nano_rp2040/raspbot_imu_bridge) by extension 'colcon_pkg'
+[0.801s] Level 1:colcon.colcon_core.package_identification:_identify(firmware/arduino_nano_rp2040/raspbot_imu_bridge) by extensions ['colcon_meta']
+[0.801s] Level 1:colcon.colcon_core.package_identification:_identify(firmware/arduino_nano_rp2040/raspbot_imu_bridge) by extension 'colcon_meta'
+[0.801s] Level 1:colcon.colcon_core.package_identification:_identify(firmware/arduino_nano_rp2040/raspbot_imu_bridge) by extensions ['ros']
+[0.801s] Level 1:colcon.colcon_core.package_identification:_identify(firmware/arduino_nano_rp2040/raspbot_imu_bridge) by extension 'ros'
+[0.801s] Level 1:colcon.colcon_core.package_identification:_identify(firmware/arduino_nano_rp2040/raspbot_imu_bridge) by extensions ['cmake', 'python']
+[0.801s] Level 1:colcon.colcon_core.package_identification:_identify(firmware/arduino_nano_rp2040/raspbot_imu_bridge) by extension 'cmake'
+[0.801s] Level 1:colcon.colcon_core.package_identification:_identify(firmware/arduino_nano_rp2040/raspbot_imu_bridge) by extension 'python'
+[0.801s] Level 1:colcon.colcon_core.package_identification:_identify(firmware/arduino_nano_rp2040/raspbot_imu_bridge) by extensions ['python_setup_py']
+[0.802s] Level 1:colcon.colcon_core.package_identification:_identify(firmware/arduino_nano_rp2040/raspbot_imu_bridge) by extension 'python_setup_py'
+[0.802s] Level 1:colcon.colcon_core.package_identification:_identify(install) by extensions ['ignore', 'ignore_ament_install']
+[0.802s] Level 1:colcon.colcon_core.package_identification:_identify(install) by extension 'ignore'
+[0.802s] Level 1:colcon.colcon_core.package_identification:_identify(install) ignored
+[0.802s] Level 1:colcon.colcon_core.package_identification:_identify(log) by extensions ['ignore', 'ignore_ament_install']
+[0.802s] Level 1:colcon.colcon_core.package_identification:_identify(log) by extension 'ignore'
+[0.802s] Level 1:colcon.colcon_core.package_identification:_identify(log) ignored
+[0.802s] Level 1:colcon.colcon_core.package_identification:_identify(raspbot_bringup) by extensions ['ignore', 'ignore_ament_install']
+[0.802s] Level 1:colcon.colcon_core.package_identification:_identify(raspbot_bringup) by extension 'ignore'
+[0.802s] Level 1:colcon.colcon_core.package_identification:_identify(raspbot_bringup) by extension 'ignore_ament_install'
+[0.802s] Level 1:colcon.colcon_core.package_identification:_identify(raspbot_bringup) by extensions ['colcon_pkg']
+[0.802s] Level 1:colcon.colcon_core.package_identification:_identify(raspbot_bringup) by extension 'colcon_pkg'
+[0.802s] Level 1:colcon.colcon_core.package_identification:_identify(raspbot_bringup) by extensions ['colcon_meta']
+[0.802s] Level 1:colcon.colcon_core.package_identification:_identify(raspbot_bringup) by extension 'colcon_meta'
+[0.803s] Level 1:colcon.colcon_core.package_identification:_identify(raspbot_bringup) by extensions ['ros']
+[0.803s] Level 1:colcon.colcon_core.package_identification:_identify(raspbot_bringup) by extension 'ros'
+[0.815s] DEBUG:colcon.colcon_core.package_identification:Package 'raspbot_bringup' with type 'ros.ament_python' and name 'raspbot_bringup'
+[0.815s] Level 1:colcon.colcon_core.package_identification:_identify(raspbot_hailo_tracking) by extensions ['ignore', 'ignore_ament_install']
+[0.815s] Level 1:colcon.colcon_core.package_identification:_identify(raspbot_hailo_tracking) by extension 'ignore'
+[0.815s] Level 1:colcon.colcon_core.package_identification:_identify(raspbot_hailo_tracking) by extension 'ignore_ament_install'
+[0.815s] Level 1:colcon.colcon_core.package_identification:_identify(raspbot_hailo_tracking) by extensions ['colcon_pkg']
+[0.815s] Level 1:colcon.colcon_core.package_identification:_identify(raspbot_hailo_tracking) by extension 'colcon_pkg'
+[0.815s] Level 1:colcon.colcon_core.package_identification:_identify(raspbot_hailo_tracking) by extensions ['colcon_meta']
+[0.815s] Level 1:colcon.colcon_core.package_identification:_identify(raspbot_hailo_tracking) by extension 'colcon_meta'
+[0.815s] Level 1:colcon.colcon_core.package_identification:_identify(raspbot_hailo_tracking) by extensions ['ros']
+[0.816s] Level 1:colcon.colcon_core.package_identification:_identify(raspbot_hailo_tracking) by extension 'ros'
+[0.818s] DEBUG:colcon.colcon_core.package_identification:Package 'raspbot_hailo_tracking' with type 'ros.ament_cmake' and name 'raspbot_hailo_tracking'
+[0.818s] Level 1:colcon.colcon_core.package_identification:_identify(raspbot_hw) by extensions ['ignore', 'ignore_ament_install']
+[0.818s] Level 1:colcon.colcon_core.package_identification:_identify(raspbot_hw) by extension 'ignore'
+[0.819s] Level 1:colcon.colcon_core.package_identification:_identify(raspbot_hw) by extension 'ignore_ament_install'
+[0.819s] Level 1:colcon.colcon_core.package_identification:_identify(raspbot_hw) by extensions ['colcon_pkg']
+[0.819s] Level 1:colcon.colcon_core.package_identification:_identify(raspbot_hw) by extension 'colcon_pkg'
+[0.819s] Level 1:colcon.colcon_core.package_identification:_identify(raspbot_hw) by extensions ['colcon_meta']
+[0.819s] Level 1:colcon.colcon_core.package_identification:_identify(raspbot_hw) by extension 'colcon_meta'
+[0.819s] Level 1:colcon.colcon_core.package_identification:_identify(raspbot_hw) by extensions ['ros']
+[0.819s] Level 1:colcon.colcon_core.package_identification:_identify(raspbot_hw) by extension 'ros'
+[0.821s] DEBUG:colcon.colcon_core.package_identification:Package 'raspbot_hw' with type 'ros.ament_python' and name 'raspbot_hw'
+[0.821s] Level 1:colcon.colcon_core.package_identification:_identify(raspbot_teleop) by extensions ['ignore', 'ignore_ament_install']
+[0.821s] Level 1:colcon.colcon_core.package_identification:_identify(raspbot_teleop) by extension 'ignore'
+[0.821s] Level 1:colcon.colcon_core.package_identification:_identify(raspbot_teleop) by extension 'ignore_ament_install'
+[0.821s] Level 1:colcon.colcon_core.package_identification:_identify(raspbot_teleop) by extensions ['colcon_pkg']
+[0.821s] Level 1:colcon.colcon_core.package_identification:_identify(raspbot_teleop) by extension 'colcon_pkg'
+[0.821s] Level 1:colcon.colcon_core.package_identification:_identify(raspbot_teleop) by extensions ['colcon_meta']
+[0.821s] Level 1:colcon.colcon_core.package_identification:_identify(raspbot_teleop) by extension 'colcon_meta'
+[0.821s] Level 1:colcon.colcon_core.package_identification:_identify(raspbot_teleop) by extensions ['ros']
+[0.821s] Level 1:colcon.colcon_core.package_identification:_identify(raspbot_teleop) by extension 'ros'
+[0.823s] DEBUG:colcon.colcon_core.package_identification:Package 'raspbot_teleop' with type 'ros.ament_python' and name 'raspbot_teleop'
+[0.823s] Level 1:colcon.colcon_core.package_identification:_identify(raspbot_web_video) by extensions ['ignore', 'ignore_ament_install']
+[0.823s] Level 1:colcon.colcon_core.package_identification:_identify(raspbot_web_video) by extension 'ignore'
+[0.823s] Level 1:colcon.colcon_core.package_identification:_identify(raspbot_web_video) by extension 'ignore_ament_install'
+[0.823s] Level 1:colcon.colcon_core.package_identification:_identify(raspbot_web_video) by extensions ['colcon_pkg']
+[0.823s] Level 1:colcon.colcon_core.package_identification:_identify(raspbot_web_video) by extension 'colcon_pkg'
+[0.824s] Level 1:colcon.colcon_core.package_identification:_identify(raspbot_web_video) by extensions ['colcon_meta']
+[0.824s] Level 1:colcon.colcon_core.package_identification:_identify(raspbot_web_video) by extension 'colcon_meta'
+[0.824s] Level 1:colcon.colcon_core.package_identification:_identify(raspbot_web_video) by extensions ['ros']
+[0.824s] Level 1:colcon.colcon_core.package_identification:_identify(raspbot_web_video) by extension 'ros'
+[0.825s] DEBUG:colcon.colcon_core.package_identification:Package 'raspbot_web_video' with type 'ros.ament_python' and name 'raspbot_web_video'
+[0.826s] Level 1:colcon.colcon_core.package_discovery:discover_packages(recursive) using defaults
+[0.826s] Level 1:colcon.colcon_core.package_discovery:discover_packages(ignore) discover
+[0.826s] Level 1:colcon.colcon_core.package_discovery:discover_packages(ignore) using defaults
+[0.826s] Level 1:colcon.colcon_core.package_discovery:discover_packages(path) discover
+[0.826s] Level 1:colcon.colcon_core.package_discovery:discover_packages(path) using defaults
+[0.913s] INFO:colcon.colcon_core.package_selection:Skipping not selected package 'raspbot_hailo_tracking' in 'raspbot_hailo_tracking'
+[0.913s] INFO:colcon.colcon_core.package_selection:Skipping not selected package 'raspbot_teleop' in 'raspbot_teleop'
+[0.915s] Level 1:colcon.colcon_core.package_discovery:discover_packages(prefix_path) check parameters
+[0.915s] Level 1:colcon.colcon_core.package_discovery:discover_packages(prefix_path) discover
+[0.957s] DEBUG:colcon.colcon_installed_package_information.package_discovery:Found 289 installed packages in /home/jedld/ros2_foxy/install
+[0.959s] Level 1:colcon.colcon_core.package_discovery:discover_packages(prefix_path) using defaults
+[1.180s] Level 5:colcon.colcon_core.verb:set package 'raspbot_hw' build argument 'cmake_args' from command line to 'None'
+[1.180s] Level 5:colcon.colcon_core.verb:set package 'raspbot_hw' build argument 'cmake_target' from command line to 'None'
+[1.180s] Level 5:colcon.colcon_core.verb:set package 'raspbot_hw' build argument 'cmake_target_skip_unavailable' from command line to 'False'
+[1.180s] Level 5:colcon.colcon_core.verb:set package 'raspbot_hw' build argument 'cmake_clean_cache' from command line to 'False'
+[1.180s] Level 5:colcon.colcon_core.verb:set package 'raspbot_hw' build argument 'cmake_clean_first' from command line to 'False'
+[1.181s] Level 5:colcon.colcon_core.verb:set package 'raspbot_hw' build argument 'cmake_force_configure' from command line to 'False'
+[1.181s] Level 5:colcon.colcon_core.verb:set package 'raspbot_hw' build argument 'ament_cmake_args' from command line to 'None'
+[1.181s] Level 5:colcon.colcon_core.verb:set package 'raspbot_hw' build argument 'catkin_cmake_args' from command line to 'None'
+[1.181s] Level 5:colcon.colcon_core.verb:set package 'raspbot_hw' build argument 'catkin_skip_building_tests' from command line to 'False'
+[1.181s] DEBUG:colcon.colcon_core.verb:Building package 'raspbot_hw' with the following arguments: {'ament_cmake_args': None, 'build_base': '/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw', 'catkin_cmake_args': None, 'catkin_skip_building_tests': False, 'cmake_args': None, 'cmake_clean_cache': False, 'cmake_clean_first': False, 'cmake_force_configure': False, 'cmake_target': None, 'cmake_target_skip_unavailable': False, 'install_base': '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw', 'merge_install': False, 'path': '/home/jedld/ros2_foxy/src/raspbot_ros2/raspbot_hw', 'symlink_install': True, 'test_result_base': None}
+[1.181s] Level 5:colcon.colcon_core.verb:set package 'raspbot_web_video' build argument 'cmake_args' from command line to 'None'
+[1.181s] Level 5:colcon.colcon_core.verb:set package 'raspbot_web_video' build argument 'cmake_target' from command line to 'None'
+[1.181s] Level 5:colcon.colcon_core.verb:set package 'raspbot_web_video' build argument 'cmake_target_skip_unavailable' from command line to 'False'
+[1.181s] Level 5:colcon.colcon_core.verb:set package 'raspbot_web_video' build argument 'cmake_clean_cache' from command line to 'False'
+[1.181s] Level 5:colcon.colcon_core.verb:set package 'raspbot_web_video' build argument 'cmake_clean_first' from command line to 'False'
+[1.181s] Level 5:colcon.colcon_core.verb:set package 'raspbot_web_video' build argument 'cmake_force_configure' from command line to 'False'
+[1.181s] Level 5:colcon.colcon_core.verb:set package 'raspbot_web_video' build argument 'ament_cmake_args' from command line to 'None'
+[1.181s] Level 5:colcon.colcon_core.verb:set package 'raspbot_web_video' build argument 'catkin_cmake_args' from command line to 'None'
+[1.181s] Level 5:colcon.colcon_core.verb:set package 'raspbot_web_video' build argument 'catkin_skip_building_tests' from command line to 'False'
+[1.181s] DEBUG:colcon.colcon_core.verb:Building package 'raspbot_web_video' with the following arguments: {'ament_cmake_args': None, 'build_base': '/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video', 'catkin_cmake_args': None, 'catkin_skip_building_tests': False, 'cmake_args': None, 'cmake_clean_cache': False, 'cmake_clean_first': False, 'cmake_force_configure': False, 'cmake_target': None, 'cmake_target_skip_unavailable': False, 'install_base': '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video', 'merge_install': False, 'path': '/home/jedld/ros2_foxy/src/raspbot_ros2/raspbot_web_video', 'symlink_install': True, 'test_result_base': None}
+[1.182s] Level 5:colcon.colcon_core.verb:set package 'raspbot_bringup' build argument 'cmake_args' from command line to 'None'
+[1.182s] Level 5:colcon.colcon_core.verb:set package 'raspbot_bringup' build argument 'cmake_target' from command line to 'None'
+[1.182s] Level 5:colcon.colcon_core.verb:set package 'raspbot_bringup' build argument 'cmake_target_skip_unavailable' from command line to 'False'
+[1.182s] Level 5:colcon.colcon_core.verb:set package 'raspbot_bringup' build argument 'cmake_clean_cache' from command line to 'False'
+[1.182s] Level 5:colcon.colcon_core.verb:set package 'raspbot_bringup' build argument 'cmake_clean_first' from command line to 'False'
+[1.182s] Level 5:colcon.colcon_core.verb:set package 'raspbot_bringup' build argument 'cmake_force_configure' from command line to 'False'
+[1.182s] Level 5:colcon.colcon_core.verb:set package 'raspbot_bringup' build argument 'ament_cmake_args' from command line to 'None'
+[1.182s] Level 5:colcon.colcon_core.verb:set package 'raspbot_bringup' build argument 'catkin_cmake_args' from command line to 'None'
+[1.182s] Level 5:colcon.colcon_core.verb:set package 'raspbot_bringup' build argument 'catkin_skip_building_tests' from command line to 'False'
+[1.182s] DEBUG:colcon.colcon_core.verb:Building package 'raspbot_bringup' with the following arguments: {'ament_cmake_args': None, 'build_base': '/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_bringup', 'catkin_cmake_args': None, 'catkin_skip_building_tests': False, 'cmake_args': None, 'cmake_clean_cache': False, 'cmake_clean_first': False, 'cmake_force_configure': False, 'cmake_target': None, 'cmake_target_skip_unavailable': False, 'install_base': '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_bringup', 'merge_install': False, 'path': '/home/jedld/ros2_foxy/src/raspbot_ros2/raspbot_bringup', 'symlink_install': True, 'test_result_base': None}
+[1.182s] INFO:colcon.colcon_core.executor:Executing jobs using 'parallel' executor
+[1.183s] DEBUG:colcon.colcon_parallel_executor.executor.parallel:run_until_complete
+[1.184s] INFO:colcon.colcon_ros.task.ament_python.build:Building ROS package in '/home/jedld/ros2_foxy/src/raspbot_ros2/raspbot_hw' with build type 'ament_python'
+[1.184s] Level 1:colcon.colcon_core.shell:create_environment_hook('raspbot_hw', 'ament_prefix_path')
+[1.208s] INFO:colcon.colcon_core.plugin_system:Skipping extension 'colcon_core.shell.bat': Not used on non-Windows systems
+[1.208s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/share/raspbot_hw/hook/ament_prefix_path.ps1'
+[1.211s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/share/raspbot_hw/hook/ament_prefix_path.dsv'
+[1.214s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/share/raspbot_hw/hook/ament_prefix_path.sh'
+[1.216s] INFO:colcon.colcon_core.shell:Skip shell extension 'powershell' for command environment: Not usable outside of PowerShell
+[1.216s] DEBUG:colcon.colcon_core.shell:Skip shell extension 'dsv' for command environment
+[1.248s] INFO:colcon.colcon_ros.task.ament_python.build:Building ROS package in '/home/jedld/ros2_foxy/src/raspbot_ros2/raspbot_web_video' with build type 'ament_python'
+[1.248s] Level 1:colcon.colcon_core.shell:create_environment_hook('raspbot_web_video', 'ament_prefix_path')
+[1.248s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/share/raspbot_web_video/hook/ament_prefix_path.ps1'
+[1.249s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/share/raspbot_web_video/hook/ament_prefix_path.dsv'
+[1.250s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/share/raspbot_web_video/hook/ament_prefix_path.sh'
+[1.251s] INFO:colcon.colcon_core.shell:Skip shell extension 'powershell' for command environment: Not usable outside of PowerShell
+[1.251s] DEBUG:colcon.colcon_core.shell:Skip shell extension 'dsv' for command environment
+[1.917s] INFO:colcon.colcon_core.task.python.build:Building Python package in '/home/jedld/ros2_foxy/src/raspbot_ros2/raspbot_hw'
+[1.917s] INFO:colcon.colcon_core.shell:Skip shell extension 'powershell' for command environment: Not usable outside of PowerShell
+[1.917s] DEBUG:colcon.colcon_core.shell:Skip shell extension 'dsv' for command environment
+[2.512s] INFO:colcon.colcon_core.task.python.build:Building Python package in '/home/jedld/ros2_foxy/src/raspbot_ros2/raspbot_web_video'
+[2.512s] INFO:colcon.colcon_core.shell:Skip shell extension 'powershell' for command environment: Not usable outside of PowerShell
+[2.513s] DEBUG:colcon.colcon_core.shell:Skip shell extension 'dsv' for command environment
+[4.784s] DEBUG:colcon.colcon_core.event_handler.log_command:Invoking command in '/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video': PYTHONPATH=/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video/build --no-deps symlink_data
+[4.795s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/share/ament_index/resource_index/packages/raspbot_hw
+[4.795s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/share/raspbot_hw/package.xml
+[4.795s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/share/raspbot_hw/config/raspbot_hw.yaml
+[4.795s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/share/raspbot_hw/launch/hw.launch.py
+[4.796s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/raspbot_hw/camera_gimbal
+[4.796s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/raspbot_hw/gpio_sensors
+[4.796s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/raspbot_hw/imu_serial
+[4.796s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/raspbot_hw/lightbar
+[4.796s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/raspbot_hw/motor_driver
+[4.796s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/raspbot_hw/motor_id_test
+[4.796s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/raspbot_hw/oled
+[4.796s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/raspbot_hw/opencv_camera
+[4.796s] DEBUG:colcon.colcon_core.task.python.build:While undoing a previous installation files outside the Python library path are being ignored: /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/raspbot_hw/ultrasonic
+[4.799s] DEBUG:colcon.colcon_core.event_handler.log_command:Invoking command in '/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw': PYTHONPATH=/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/build --no-deps symlink_data --force
+[6.267s] Level 1:colcon.colcon_core.shell:create_environment_hook('raspbot_hw', 'pythonpath_develop')
+[6.268s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/share/raspbot_hw/hook/pythonpath_develop.ps1'
+[6.269s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/share/raspbot_hw/hook/pythonpath_develop.dsv'
+[6.272s] DEBUG:colcon.colcon_core.event_handler.log_command:Invoked command in '/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw' returned '0': PYTHONPATH=/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/build --no-deps symlink_data --force
+[6.273s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/share/raspbot_hw/hook/pythonpath_develop.sh'
+[6.301s] Level 1:colcon.colcon_core.environment:checking '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw' for CMake module files
+[6.302s] Level 1:colcon.colcon_core.environment:checking '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw' for CMake config files
+[6.303s] Level 1:colcon.colcon_core.environment:checking '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib'
+[6.304s] Level 1:colcon.colcon_core.environment:checking '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/bin'
+[6.304s] Level 1:colcon.colcon_core.environment:checking '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/pkgconfig/raspbot_hw.pc'
+[6.304s] Level 1:colcon.colcon_core.environment:checking '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/python3.12/site-packages'
+[6.305s] Level 1:colcon.colcon_core.shell:create_environment_hook('raspbot_hw', 'pythonpath')
+[6.306s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/share/raspbot_hw/hook/pythonpath.ps1'
+[6.307s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/share/raspbot_hw/hook/pythonpath.dsv'
+[6.309s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/share/raspbot_hw/hook/pythonpath.sh'
+[6.314s] Level 1:colcon.colcon_core.environment:checking '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/bin'
+[6.315s] Level 1:colcon.colcon_core.environment:create_environment_scripts_only(raspbot_hw)
+[6.315s] INFO:colcon.colcon_core.shell:Creating package script '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/share/raspbot_hw/package.ps1'
+[6.317s] INFO:colcon.colcon_core.shell:Creating package descriptor '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/share/raspbot_hw/package.dsv'
+[6.320s] INFO:colcon.colcon_core.shell:Creating package script '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/share/raspbot_hw/package.sh'
+[6.322s] INFO:colcon.colcon_core.shell:Creating package script '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/share/raspbot_hw/package.bash'
+[6.327s] INFO:colcon.colcon_core.shell:Creating package script '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/share/raspbot_hw/package.zsh'
+[6.329s] Level 1:colcon.colcon_core.environment:create_file_with_runtime_dependencies(/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/share/colcon-core/packages/raspbot_hw)
+[6.393s] Level 1:colcon.colcon_core.shell:create_environment_hook('raspbot_web_video', 'pythonpath_develop')
+[6.394s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video/share/raspbot_web_video/hook/pythonpath_develop.ps1'
+[6.394s] DEBUG:colcon.colcon_core.event_handler.log_command:Invoked command in '/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video' returned '0': PYTHONPATH=/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video/build --no-deps symlink_data
+[6.395s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video/share/raspbot_web_video/hook/pythonpath_develop.dsv'
+[6.395s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video/share/raspbot_web_video/hook/pythonpath_develop.sh'
+[6.396s] Level 1:colcon.colcon_core.environment:checking '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video' for CMake module files
+[6.397s] Level 1:colcon.colcon_core.environment:checking '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video' for CMake config files
+[6.398s] Level 1:colcon.colcon_core.environment:checking '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/lib'
+[6.398s] Level 1:colcon.colcon_core.environment:checking '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/bin'
+[6.398s] Level 1:colcon.colcon_core.environment:checking '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/lib/pkgconfig/raspbot_web_video.pc'
+[6.399s] Level 1:colcon.colcon_core.environment:checking '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/lib/python3.12/site-packages'
+[6.399s] Level 1:colcon.colcon_core.shell:create_environment_hook('raspbot_web_video', 'pythonpath')
+[6.399s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/share/raspbot_web_video/hook/pythonpath.ps1'
+[6.400s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/share/raspbot_web_video/hook/pythonpath.dsv'
+[6.400s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/share/raspbot_web_video/hook/pythonpath.sh'
+[6.401s] Level 1:colcon.colcon_core.environment:checking '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/bin'
+[6.402s] Level 1:colcon.colcon_core.environment:create_environment_scripts_only(raspbot_web_video)
+[6.402s] INFO:colcon.colcon_core.shell:Creating package script '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/share/raspbot_web_video/package.ps1'
+[6.403s] INFO:colcon.colcon_core.shell:Creating package descriptor '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/share/raspbot_web_video/package.dsv'
+[6.403s] INFO:colcon.colcon_core.shell:Creating package script '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/share/raspbot_web_video/package.sh'
+[6.404s] INFO:colcon.colcon_core.shell:Creating package script '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/share/raspbot_web_video/package.bash'
+[6.404s] INFO:colcon.colcon_core.shell:Creating package script '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/share/raspbot_web_video/package.zsh'
+[6.405s] Level 1:colcon.colcon_core.environment:create_file_with_runtime_dependencies(/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/share/colcon-core/packages/raspbot_web_video)
+[6.406s] INFO:colcon.colcon_ros.task.ament_python.build:Building ROS package in '/home/jedld/ros2_foxy/src/raspbot_ros2/raspbot_bringup' with build type 'ament_python'
+[6.406s] Level 1:colcon.colcon_core.shell:create_environment_hook('raspbot_bringup', 'ament_prefix_path')
+[6.406s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_bringup/share/raspbot_bringup/hook/ament_prefix_path.ps1'
+[6.410s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_bringup/share/raspbot_bringup/hook/ament_prefix_path.dsv'
+[6.412s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_bringup/share/raspbot_bringup/hook/ament_prefix_path.sh'
+[6.413s] INFO:colcon.colcon_core.shell:Skip shell extension 'powershell' for command environment: Not usable outside of PowerShell
+[6.413s] DEBUG:colcon.colcon_core.shell:Skip shell extension 'dsv' for command environment
+[6.439s] WARNING:colcon.colcon_core.shell:The following packages are in the workspace but haven't been built:
+- raspbot_hailo_tracking
+They are being used from the following locations instead:
+- /home/jedld/ros2_foxy/install/raspbot_hailo_tracking
+To suppress this warning ignore these packages in the workspace:
+--packages-ignore raspbot_hailo_tracking
+[7.073s] INFO:colcon.colcon_core.task.python.build:Building Python package in '/home/jedld/ros2_foxy/src/raspbot_ros2/raspbot_bringup'
+[7.074s] INFO:colcon.colcon_core.shell:Skip shell extension 'powershell' for command environment: Not usable outside of PowerShell
+[7.074s] DEBUG:colcon.colcon_core.shell:Skip shell extension 'dsv' for command environment
+[8.760s] DEBUG:colcon.colcon_core.event_handler.log_command:Invoking command in '/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_bringup': AMENT_PREFIX_PATH=/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video:/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw:${AMENT_PREFIX_PATH} PYTHONPATH=/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_bringup/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_bringup/lib/python3.12/site-packages:/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video:/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/lib/python3.12/site-packages:/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw:/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_bringup/build --no-deps symlink_data
+[10.212s] Level 1:colcon.colcon_core.shell:create_environment_hook('raspbot_bringup', 'pythonpath_develop')
+[10.212s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_bringup/share/raspbot_bringup/hook/pythonpath_develop.ps1'
+[10.213s] DEBUG:colcon.colcon_core.event_handler.log_command:Invoked command in '/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_bringup' returned '0': AMENT_PREFIX_PATH=/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video:/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw:${AMENT_PREFIX_PATH} PYTHONPATH=/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_bringup/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_bringup/lib/python3.12/site-packages:/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_web_video:/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_web_video/lib/python3.12/site-packages:/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw:/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_bringup/build --no-deps symlink_data
+[10.214s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_bringup/share/raspbot_bringup/hook/pythonpath_develop.dsv'
+[10.214s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_bringup/share/raspbot_bringup/hook/pythonpath_develop.sh'
+[10.215s] Level 1:colcon.colcon_core.environment:checking '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_bringup' for CMake module files
+[10.215s] Level 1:colcon.colcon_core.environment:checking '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_bringup' for CMake config files
+[10.216s] Level 1:colcon.colcon_core.environment:checking '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_bringup/lib'
+[10.216s] Level 1:colcon.colcon_core.environment:checking '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_bringup/bin'
+[10.216s] Level 1:colcon.colcon_core.environment:checking '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_bringup/lib/pkgconfig/raspbot_bringup.pc'
+[10.217s] Level 1:colcon.colcon_core.environment:checking '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_bringup/lib/python3.12/site-packages'
+[10.217s] Level 1:colcon.colcon_core.shell:create_environment_hook('raspbot_bringup', 'pythonpath')
+[10.217s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_bringup/share/raspbot_bringup/hook/pythonpath.ps1'
+[10.218s] INFO:colcon.colcon_core.shell:Creating environment descriptor '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_bringup/share/raspbot_bringup/hook/pythonpath.dsv'
+[10.219s] INFO:colcon.colcon_core.shell:Creating environment hook '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_bringup/share/raspbot_bringup/hook/pythonpath.sh'
+[10.219s] Level 1:colcon.colcon_core.environment:checking '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_bringup/bin'
+[10.220s] Level 1:colcon.colcon_core.environment:create_environment_scripts_only(raspbot_bringup)
+[10.220s] INFO:colcon.colcon_core.shell:Creating package script '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_bringup/share/raspbot_bringup/package.ps1'
+[10.221s] INFO:colcon.colcon_core.shell:Creating package descriptor '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_bringup/share/raspbot_bringup/package.dsv'
+[10.221s] INFO:colcon.colcon_core.shell:Creating package script '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_bringup/share/raspbot_bringup/package.sh'
+[10.222s] INFO:colcon.colcon_core.shell:Creating package script '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_bringup/share/raspbot_bringup/package.bash'
+[10.222s] INFO:colcon.colcon_core.shell:Creating package script '/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_bringup/share/raspbot_bringup/package.zsh'
+[10.223s] Level 1:colcon.colcon_core.environment:create_file_with_runtime_dependencies(/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_bringup/share/colcon-core/packages/raspbot_bringup)
+[10.223s] DEBUG:colcon.colcon_parallel_executor.executor.parallel:closing loop
+[10.223s] DEBUG:colcon.colcon_parallel_executor.executor.parallel:loop closed
+[10.224s] DEBUG:colcon.colcon_parallel_executor.executor.parallel:run_until_complete finished with '0'
+[10.224s] DEBUG:colcon.colcon_core.event_reactor:joining thread
+[10.263s] INFO:colcon.colcon_core.plugin_system:Skipping extension 'colcon_notification.desktop_notification.notify_send': Could not find 'notify-send'
+[10.263s] INFO:colcon.colcon_core.plugin_system:Skipping extension 'colcon_notification.desktop_notification.terminal_notifier': Not used on non-Darwin systems
+[10.263s] INFO:colcon.colcon_core.plugin_system:Skipping extension 'colcon_notification.desktop_notification.win32': Not used on non-Windows systems
+[10.263s] INFO:colcon.colcon_notification.desktop_notification:Sending desktop notification using 'notify2'
+[10.361s] DEBUG:colcon.colcon_notification.desktop_notification.notify2:Failed to initialize notify2: org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.Notifications was not provided by any .service files
+[10.362s] DEBUG:colcon.colcon_core.event_reactor:joined thread
+[10.362s] INFO:colcon.colcon_core.shell:Creating prefix script '/home/jedld/ros2_foxy/src/raspbot_ros2/install/local_setup.ps1'
+[10.364s] INFO:colcon.colcon_core.shell:Creating prefix util module '/home/jedld/ros2_foxy/src/raspbot_ros2/install/_local_setup_util_ps1.py'
+[10.368s] INFO:colcon.colcon_core.shell:Creating prefix chain script '/home/jedld/ros2_foxy/src/raspbot_ros2/install/setup.ps1'
+[10.388s] INFO:colcon.colcon_core.shell:Creating prefix script '/home/jedld/ros2_foxy/src/raspbot_ros2/install/local_setup.sh'
+[10.390s] INFO:colcon.colcon_core.shell:Creating prefix util module '/home/jedld/ros2_foxy/src/raspbot_ros2/install/_local_setup_util_sh.py'
+[10.391s] INFO:colcon.colcon_core.shell:Creating prefix chain script '/home/jedld/ros2_foxy/src/raspbot_ros2/install/setup.sh'
+[10.412s] INFO:colcon.colcon_core.shell:Creating prefix script '/home/jedld/ros2_foxy/src/raspbot_ros2/install/local_setup.bash'
+[10.414s] INFO:colcon.colcon_core.shell:Creating prefix chain script '/home/jedld/ros2_foxy/src/raspbot_ros2/install/setup.bash'
+[10.434s] INFO:colcon.colcon_core.shell:Creating prefix script '/home/jedld/ros2_foxy/src/raspbot_ros2/install/local_setup.zsh'
+[10.436s] INFO:colcon.colcon_core.shell:Creating prefix chain script '/home/jedld/ros2_foxy/src/raspbot_ros2/install/setup.zsh'

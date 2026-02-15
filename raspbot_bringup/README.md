@@ -35,6 +35,44 @@ Optional flags:
 - Enable Hailo detection/tracking: `enable_hailo:=true hailo_hef_path:=/path/to/model.hef`
 	- Optional labels: `hailo_labels_path:=~/.local/share/raspbot/models/hailo8/coco80.labels`
 
+## Bluetooth Cardputer teleop
+
+BLE Cardputer teleop is enabled by default in bringup.
+
+- `enable_bt_cardputer_teleop:=true`
+- `bt_cardputer_name:=RaspbotCardputer`
+- optional `bt_cardputer_address:=AA:BB:CC:DD:EE:FF` (recommended for paired fixed-MAC setup)
+
+Bringup startup also powers on Bluetooth automatically on Pi.
+
+### Make Bluetooth start reliably after reboot
+
+Install/refresh the service unit and enable both services:
+
+- `sudo cp ~/ros2_foxy/src/raspbot_ros2/raspbot_bringup/systemd/raspbot.service /etc/systemd/system/`
+- `sudo systemctl daemon-reload`
+- `sudo systemctl enable bluetooth.service raspbot.service`
+- `sudo systemctl restart bluetooth.service raspbot.service`
+
+After reboot, verify:
+
+- `systemctl is-active bluetooth raspbot`
+- `bluetoothctl show | grep Powered`
+
+Expected state is `active` for both services and `Powered: yes` from `bluetoothctl`.
+
+Optional: force reconnect to a specific paired Cardputer MAC on boot:
+
+- `sudo tee /etc/default/raspbot >/dev/null <<'EOF'`
+- `CARDPUTER_BT_ADDRESS=AA:BB:CC:DD:EE:FF`
+- `CARDPUTER_BT_NAME=RaspbotCardputer`
+- `CARDPUTER_BT_PRECONNECT=0`
+- `EOF`
+- `sudo systemctl restart raspbot.service`
+
+If `CARDPUTER_BT_ADDRESS` is omitted, startup tries to find a paired device matching `CARDPUTER_BT_NAME`.
+For BLE teleop, keep `CARDPUTER_BT_PRECONNECT=0` so the ROS BLE bridge can own the GATT session.
+
 ## OLED screen
 
 Many Raspbot controller stacks include a small I2C OLED screen (often address `0x3C`).

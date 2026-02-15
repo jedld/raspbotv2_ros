@@ -29,6 +29,9 @@ def generate_launch_description():
     hailo_tilt_sign = LaunchConfiguration('hailo_tilt_sign')
     tracking_config_topic = LaunchConfiguration('tracking_config_topic')
     follow_enable_topic = LaunchConfiguration('follow_enable_topic')
+    enable_bt_cardputer_teleop = LaunchConfiguration('enable_bt_cardputer_teleop')
+    bt_cardputer_name = LaunchConfiguration('bt_cardputer_name')
+    bt_cardputer_address = LaunchConfiguration('bt_cardputer_address')
     depth_hef_path = LaunchConfiguration('depth_hef_path')
     enable_lidar = LaunchConfiguration('enable_lidar')
     enable_slam = LaunchConfiguration('enable_slam')
@@ -81,6 +84,9 @@ def generate_launch_description():
         DeclareLaunchArgument('hailo_tilt_sign', default_value='-1'),
         DeclareLaunchArgument('tracking_config_topic', default_value='tracking/config'),
         DeclareLaunchArgument('follow_enable_topic', default_value='follow/enable'),
+        DeclareLaunchArgument('enable_bt_cardputer_teleop', default_value='true'),
+        DeclareLaunchArgument('bt_cardputer_name', default_value='RaspbotCardputer'),
+        DeclareLaunchArgument('bt_cardputer_address', default_value=''),
         DeclareLaunchArgument('depth_hef_path', default_value=
             os.path.expanduser('~/.local/share/raspbot/models/hailo8/fast_depth.hef')),
         DeclareLaunchArgument('enable_lidar', default_value='true'),
@@ -156,5 +162,21 @@ def generate_launch_description():
                 'depth_hef_path': depth_hef_path,
             }.items(),
             condition=IfCondition(enable_hailo),
+        ),
+
+        Node(
+            package='raspbot_teleop',
+            executable='bt_cardputer_teleop',
+            name='bt_cardputer_teleop',
+            output='screen',
+            parameters=[
+                params_file,
+                {
+                    'device_name': bt_cardputer_name,
+                    'device_address': bt_cardputer_address,
+                    'follow_enable_topic': follow_enable_topic,
+                },
+            ],
+            condition=IfCondition(enable_bt_cardputer_teleop),
         ),
     ])

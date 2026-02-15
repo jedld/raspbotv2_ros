@@ -271,8 +271,8 @@ class Bno055SerialNode(Node):
         self._imu_pub.publish(imu_msg)
 
         # ── Publish yaw (heading) ─────────────────────────────────────
-        # BNO055 heading: 0-360 degrees, clockwise from north.
-        # Convert to ±180 and apply user offset.
+        # BNO055 heading: 0-360 degrees, clockwise from magnetic north.
+        # Published as-is (with user offset) for odometry / navigation.
         yaw = heading + self._heading_offset
         # Normalise to ±180
         while yaw > 180.0:

@@ -543,6 +543,8 @@ class ImuSerialNode(Node):
         self._imu_pub.publish(imu_msg)
 
         # ── Publish yaw (magnetometer-stabilised heading) ─────────────
+        # BNO055 heading: 0-360° from magnetic north.
+        # Published as-is (with user offset) for odometry / navigation.
         yaw = heading + self._heading_offset
         while yaw > 180.0:
             yaw -= 360.0

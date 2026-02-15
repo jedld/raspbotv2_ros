@@ -49,6 +49,36 @@ The service runs as the `jedld` user with I2C, GPIO, video, dialout, and
 plugdev group access. It waits for network (up to 30 s) before launching so the
 OLED can display the IP, and depends on `hailort.service` for the Hailo-8.
 
+## Cardputer Bluetooth teleop (default-enabled)
+
+`raspbot_bringup` starts BLE Cardputer teleop by default:
+
+- `enable_bt_cardputer_teleop:=true`
+- `bt_cardputer_name:=RaspbotCardputer`
+
+Bluetooth defaults:
+
+- Pi side: bringup powers Bluetooth on automatically at startup.
+- Cardputer side: firmware advertises BLE automatically at boot.
+
+Recommended one-time pairing/trusting on Pi (use your Cardputer MAC):
+
+```bash
+bluetoothctl
+power on
+scan on
+pair AA:BB:CC:DD:EE:FF
+trust AA:BB:CC:DD:EE:FF
+connect AA:BB:CC:DD:EE:FF
+quit
+```
+
+Then pin the paired device in launch/systemd bringup:
+
+```bash
+ros2 launch raspbot_bringup bringup.launch.py bt_cardputer_address:=AA:BB:CC:DD:EE:FF
+```
+
 ## Launch arguments
 
 All arguments have sensible defaults and can be toggled individually:
@@ -102,6 +132,9 @@ ros2 launch raspbot_bringup bringup.launch.py \
 | `hailo_tilt_sign` | `-1` | Gimbal tilt direction |
 | `tracking_config_topic` | `tracking/config` | Detection config topic |
 | `follow_enable_topic` | `follow/enable` | Auto-follow enable topic |
+| `enable_bt_cardputer_teleop` | `true` | Start BLE Cardputer teleop bridge |
+| `bt_cardputer_name` | `RaspbotCardputer` | BLE Cardputer advertised name |
+| `bt_cardputer_address` | `` | Optional paired Cardputer MAC address |
 | `params_file` | (auto) | Path to `raspbot_hw.yaml` parameter file |
 
 </details>
@@ -286,6 +319,26 @@ ros2 launch raspbot_teleop keyboard_teleop.launch.py
 # Gimbal control (arrow keys / H/J/K/L)
 ros2 launch raspbot_teleop gimbal_teleop.launch.py
 ```
+
+## Bluetooth Cardputer teleop
+
+BLE teleop bridge starts in bringup by default and powers on Bluetooth at startup.
+
+```bash
+# Default bringup (BLE teleop enabled)
+ros2 launch raspbot_bringup bringup.launch.py
+
+# Target paired Cardputer by MAC (recommended)
+ros2 launch raspbot_bringup bringup.launch.py bt_cardputer_address:=AA:BB:CC:DD:EE:FF
+
+# Disable BLE teleop bridge
+ros2 launch raspbot_bringup bringup.launch.py enable_bt_cardputer_teleop:=false
+```
+
+Cardputer firmware and instructions:
+
+- `firmware/cardputer_bt_teleop/cardputer_bt_teleop.ino`
+- `firmware/cardputer_bt_teleop/README.md`
 
 ## Arduino firmware
 

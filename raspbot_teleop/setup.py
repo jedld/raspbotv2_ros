@@ -9,10 +9,10 @@ setup(
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        ('share/' + package_name + '/launch', ['launch/keyboard_teleop.launch.py', 'launch/gimbal_teleop.launch.py']),
+        ('share/' + package_name + '/launch', ['launch/keyboard_teleop.launch.py', 'launch/gimbal_teleop.launch.py', 'launch/bt_cardputer_teleop.launch.py']),
         ('share/' + package_name, ['README.md']),
     ],
-    install_requires=['setuptools'],
+    install_requires=['setuptools', 'bleak'],
     zip_safe=True,
     maintainer='user',
     maintainer_email='user@todo.todo',
@@ -23,6 +23,7 @@ setup(
         'console_scripts': [
             'keyboard_teleop = raspbot_teleop.keyboard_teleop:main',
             'gimbal_teleop = raspbot_teleop.gimbal_teleop:main',
+            'bt_cardputer_teleop = raspbot_teleop.bt_cardputer_teleop:main',
         ],
     },
 )

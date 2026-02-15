@@ -1,0 +1,35 @@
+[6.052s] Invoking command in '/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw': PYTHONPATH=/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/build --no-deps symlink_data --force
+[7.886s] running develop
+[8.572s] running egg_info
+[8.604s] writing raspbot_hw.egg-info/PKG-INFO
+[8.604s] writing dependency_links to raspbot_hw.egg-info/dependency_links.txt
+[8.612s] writing entry points to raspbot_hw.egg-info/entry_points.txt
+[8.614s] writing requirements to raspbot_hw.egg-info/requires.txt
+[8.615s] writing top-level names to raspbot_hw.egg-info/top_level.txt
+[8.772s] reading manifest file 'raspbot_hw.egg-info/SOURCES.txt'
+[8.777s] writing manifest file 'raspbot_hw.egg-info/SOURCES.txt'
+[8.850s] running build_ext
+[8.853s] Creating /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/python3.12/site-packages/raspbot-hw.egg-link (link to .)
+[8.856s] Installing bno055_serial script to /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/raspbot_hw
+[8.856s] Installing camera_gimbal script to /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/raspbot_hw
+[8.857s] Installing front_calibration script to /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/raspbot_hw
+[8.857s] Installing gpio_sensors script to /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/raspbot_hw
+[8.857s] Installing imu_serial script to /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/raspbot_hw
+[8.857s] Installing lidar_obstacle script to /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/raspbot_hw
+[8.857s] Installing lidar_slam script to /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/raspbot_hw
+[8.858s] Installing lightbar script to /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/raspbot_hw
+[8.860s] Installing motor_driver script to /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/raspbot_hw
+[8.860s] Installing motor_id_test script to /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/raspbot_hw
+[8.860s] Installing odometry script to /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/raspbot_hw
+[8.860s] Installing oled script to /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/raspbot_hw
+[8.860s] Installing opencv_camera script to /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/raspbot_hw
+[8.860s] Installing pi_camera script to /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/raspbot_hw
+[8.862s] Installing ultrasonic script to /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/raspbot_hw
+[8.862s] 
+[8.862s] Installed /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw
+[8.862s] running symlink_data
+[8.863s] symbolically linking /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/resource/raspbot_hw -> /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/share/ament_index/resource_index/packages
+[8.863s] symbolically linking /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/package.xml -> /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/share/raspbot_hw
+[8.863s] symbolically linking /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/config/raspbot_hw.yaml -> /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/share/raspbot_hw/config
+[8.864s] symbolically linking /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/launch/hw.launch.py -> /home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/share/raspbot_hw/launch
+[9.129s] Invoked command in '/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw' returned '0': PYTHONPATH=/home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/jedld/ros2_foxy/src/raspbot_ros2/install/raspbot_hw/lib/python3.12/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/jedld/ros2_foxy/src/raspbot_ros2/build/raspbot_hw/build --no-deps symlink_data --force

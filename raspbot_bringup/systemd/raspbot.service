@@ -1,13 +1,20 @@
 [Unit]
 Description=Raspbot ROS 2 bringup (all nodes)
-After=network-online.target hailort.service
-Wants=network-online.target
+After=network-online.target hailort.service dbus.service bluetooth.service bluetooth.target
+Wants=network-online.target bluetooth.service bluetooth.target
 
 [Service]
 Type=simple
 User=jedld
 Group=jedld
 WorkingDirectory=/home/jedld/ros2_foxy
+Environment="CARDPUTER_BT_NAME=RaspbotCardputer"
+Environment="CARDPUTER_BT_PRECONNECT=0"
+EnvironmentFile=-/etc/default/raspbot
+PermissionsStartOnly=true
+ExecStartPre=-/bin/sh -c 'command -v rfkill >/dev/null 2>&1 && rfkill unblock bluetooth || true'
+ExecStartPre=-/bin/sh -c 'command -v hciconfig >/dev/null 2>&1 && hciconfig hci0 up || true'
+ExecStartPre=-/bin/sh -c 'systemctl is-active --quiet bluetooth || systemctl start bluetooth || true'
 ExecStart=/home/jedld/ros2_foxy/src/raspbot_ros2/raspbot_bringup/scripts/raspbot_start.sh
 Restart=on-failure
 RestartSec=5

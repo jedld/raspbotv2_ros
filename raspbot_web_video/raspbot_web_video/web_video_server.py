@@ -240,13 +240,21 @@ INDEX_HTML = """<!doctype html>
 
         <div class=\"card\" id=\"odomCard\">
             <h2>&#128506; Odometry &amp; Navigation</h2>
-            <p class=\"muted\">Sensor-fused position (cmd_vel + IMU + ZUPT). Record a path and navigate back to the starting point.</p>
+            <p class=\"muted\">Sensor-fused position (cmd_vel + IMU + ZUPT). Click to place numbered waypoints, then navigate the planned path. Scroll to zoom, drag to pan, right-click waypoint to remove.</p>
 
             <div style=\"display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start;\">
                 <!-- Path visualisation canvas -->
                 <div style=\"flex:0 0 auto;text-align:center;\">
-                    <canvas id=\"odomCanvas\" width=\"300\" height=\"300\" style=\"display:block;border:1px solid #ddd;border-radius:8px;background:#fafafa;\"></canvas>
-                    <div class=\"kv\" style=\"margin-top:4px;font-size:11px;\">Grid: 0.5 m &nbsp;|&nbsp; <span style=\"color:#e00;\">&#9632;</span> robot &nbsp; <span style=\"color:#08f;\">&#9632;</span> trail &nbsp; <span style=\"color:#0a0;\">&#9632;</span> recorded &nbsp; <span style=\"color:#fa0;\">&#11044;</span> origin</div>
+                    <canvas id=\"odomCanvas\" width=\"500\" height=\"500\" style=\"display:block;border:1px solid #ddd;border-radius:8px;background:#fafafa;cursor:crosshair;\"></canvas>
+                    <div class=\"kv\" style=\"margin-top:4px;font-size:11px;\">
+                        <span style=\"color:#e00;\">&#9632;</span> robot &nbsp;
+                        <span style=\"color:#08f;\">&#9632;</span> trail &nbsp;
+                        <span style=\"color:#0a0;\">&#9632;</span> recorded &nbsp;
+                        <span style=\"color:#fa0;\">&#11044;</span> origin &nbsp;
+                        <span style=\"color:#f0f;\">&#9670;</span> waypoint &nbsp;
+                        <span style=\"color:#f80;\">━</span> planned
+                    </div>
+                    <div class=\"kv\" style=\"margin-top:2px;font-size:11px;color:#888;\">Click=add WP, R-click WP=remove, Drag=pan, Scroll=zoom, R-click=reset view</div>
                 </div>
 
                 <!-- Position readout + controls -->
@@ -269,13 +277,21 @@ INDEX_HTML = """<!doctype html>
                             <button class=\"primary\" id=\"odomReturnBtn\" title=\"Navigate back to origin along recorded path\">&#8617; Return to Origin</button>
                             <button class=\"danger\" id=\"odomCancelBtn\" title=\"Cancel return-to-origin\" style=\"display:none;\">&#10006; Cancel Return</button>
                         </div>
+                        <div style=\"display:flex;gap:6px;flex-wrap:wrap;\">
+                            <button class=\"primary\" id=\"odomNavBtn\" title=\"Navigate the planned multi-waypoint path\" style=\"display:none;\">&#128205; Navigate Path</button>
+                            <button class=\"danger\" id=\"odomNavCancelBtn\" title=\"Cancel navigation\" style=\"display:none;\">&#10006; Cancel Nav</button>
+                            <button id=\"odomUndoWpBtn\" title=\"Remove last waypoint\" style=\"display:none;\">&#8630; Undo WP</button>
+                            <button id=\"odomClearWpBtn\" title=\"Clear all waypoints\" style=\"display:none;\">&#128465; Clear All</button>
+                        </div>
                     </div>
 
                     <div class=\"kv\" style=\"margin-top:8px;\">
                         Status: <span id=\"odomStatus\">idle</span>
                     </div>
+                    <div id=\"odomStuckBanner\" style=\"background:#fdd;border:1px solid #e00;border-radius:6px;padding:6px 10px;margin-top:6px;display:none;font-size:12px;color:#b00;font-weight:bold;\">&#9888; STUCK DETECTED — auto-navigation cancelled</div>
                     <div class=\"kv\" style=\"margin-top:3px;font-size:11px;color:#888;\">
                         Waypoints: <span id=\"odomWpCount\">0</span> &nbsp;|&nbsp; Trail: <span id=\"odomTrailCount\">0</span>
+                        &nbsp;|&nbsp; Nav: <span id=\"odomWpTarget\">idle</span>
                     </div>
                     <div style=\"margin-top:8px;padding-top:6px;border-top:1px solid #eee;\">
                         <div class=\"kv\" style=\"font-size:12px;\">&#128506; SLAM Map: <span id=\"slamStatus\" style=\"color:#888;\">waiting…</span></div>
@@ -870,11 +886,12 @@ INDEX_HTML = """<!doctype html>
             scheduleSend();
         }, { passive: false });
 
-        // WASD: drive. We continuously send at ~10Hz while keys are held.
+        // WASD: drive. Fire-and-forget sends to avoid request pile-up.
         const pressed = new Set();
         let lastLin = 0;
         let lastAng = 0;
         let driveTimer = null;
+        let driveSending = false;  // guard against overlapping requests
 
         function computeDrive() {
             const fast = pressed.has('shift');
@@ -895,15 +912,24 @@ INDEX_HTML = """<!doctype html>
             return {lin, lat, ang};
         }
 
+        function fireDriveSend() {
+            if (driveSending) return;  // skip if previous request still in-flight
+            const {lin, lat, ang} = computeDrive();
+            lastLin = lin;
+            lastAng = ang;
+            cmdVelEl.textContent = `${lin.toFixed(2)}, ${lat.toFixed(2)}, ${ang.toFixed(2)}`;
+            driveSending = true;
+            fetch('/api/cmd_vel', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({linear_x: lin, linear_y: lat, angular_z: ang})
+            }).catch(() => {}).finally(() => { driveSending = false; });
+        }
+
         function startDriveLoop() {
+            fireDriveSend();  // send first command immediately
             if (driveTimer) return;
-            driveTimer = setInterval(async () => {
-                const {lin, lat, ang} = computeDrive();
-                lastLin = lin;
-                lastAng = ang;
-                cmdVelEl.textContent = `${lin.toFixed(2)}, ${lat.toFixed(2)}, ${ang.toFixed(2)}`;
-                await sendCmdVel(lin, lat, ang);
-            }, 100);
+            driveTimer = setInterval(fireDriveSend, 60);  // 16 Hz sustain
         }
 
         function stopDriveLoop() {
@@ -915,7 +941,9 @@ INDEX_HTML = """<!doctype html>
             lastLin = 0;
             lastAng = 0;
             cmdVelEl.textContent = `0.00, 0.00, 0.00`;
-            stopCmdVel();
+            // Fire-and-forget stop
+            fetch('/api/cmd_vel/stop', {method:'POST'}).catch(() => {});
+            driveSending = false;
         }
 
         function normalizeKey(ev) {
@@ -926,10 +954,14 @@ INDEX_HTML = """<!doctype html>
         document.addEventListener('keydown', (ev) => {
             const k = normalizeKey(ev);
             if (!['w','a','s','d','q','e','shift'].includes(k)) return;
-            // prevent browser from scrolling on space etc; WASD doesn't scroll but keep consistent.
             ev.preventDefault();
+            const wasEmpty = pressed.size === 0;
             pressed.add(k);
-            startDriveLoop();
+            if (wasEmpty) {
+                startDriveLoop();
+            } else {
+                fireDriveSend();  // key combo changed — send updated velocity immediately
+            }
         }, { passive: false });
 
         document.addEventListener('keyup', (ev) => {
@@ -939,6 +971,8 @@ INDEX_HTML = """<!doctype html>
             pressed.delete(k);
             if (pressed.size === 0) {
                 stopDriveLoop();
+            } else {
+                fireDriveSend();  // key combo changed — send updated velocity immediately
             }
         }, { passive: false });
 
@@ -1703,11 +1737,17 @@ INDEX_HTML = """<!doctype html>
         const odomStatus = document.getElementById('odomStatus');
         const odomWpCount = document.getElementById('odomWpCount');
         const odomTrailCount = document.getElementById('odomTrailCount');
+        const odomWpTarget = document.getElementById('odomWpTarget');
         const odomSetOriginBtn = document.getElementById('odomSetOrigin');
         const odomStartRecBtn = document.getElementById('odomStartRec');
         const odomStopRecBtn = document.getElementById('odomStopRec');
         const odomReturnBtn = document.getElementById('odomReturnBtn');
         const odomCancelBtn = document.getElementById('odomCancelBtn');
+        const odomNavBtn = document.getElementById('odomNavBtn');
+        const odomNavCancelBtn = document.getElementById('odomNavCancelBtn');
+        const odomClearWpBtn = document.getElementById('odomClearWpBtn');
+        const odomUndoWpBtn = document.getElementById('odomUndoWpBtn');
+        const odomStuckBanner = document.getElementById('odomStuckBanner');
 
         // SLAM map elements
         const slamStatusEl = document.getElementById('slamStatus');
@@ -1723,35 +1763,418 @@ INDEX_HTML = """<!doctype html>
 
         let odomRecording = false;
         let odomReturning = false;
+        let odomNavigating = false;
         let odomTotalDist = 0.0;
         let odomPrevX = null, odomPrevY = null;
-        let odomBusy = false; // prevent double-clicks during service calls
+        let odomBusy = false;
+
+        // Pan & Zoom state
+        let odomPanX = 0, odomPanY = 0; // pan offset in pixels
+        let odomZoom = 1.0; // zoom multiplier (1.0 = auto-fit)
+        let odomUserZoom = false; // true when user has manually zoomed
+        let odomDragging = false;
+        let odomDragStartX = 0, odomDragStartY = 0;
+        let odomPanStartX = 0, odomPanStartY = 0;
+
+        // Waypoint placement — multi-waypoint list
+        let odomWaypoints = []; // [{x, y}, ...] in map coords
+        let odomPlannedPath = []; // [{x, y}, ...] A*-planned path through all waypoints
+        let odomDragWpIdx = -1; // index of waypoint being dragged, or -1
+        const WAYPOINT_HIT_RADIUS = 12; // px radius for click/right-click hit testing
 
         // SLAM map state
         let lastMapData = null;
-        let lastMapBytes = null;  // decoded Uint8Array
+        let lastMapBytes = null;
         let slamOverlayOn = true;
         slamOverlayChk.addEventListener('change', function() { slamOverlayOn = this.checked; });
 
-        function drawOdomMap(data) {
+        // Last known auto-computed scale/maxR for canvas↔map conversion
+        let lastOdomScale = 1.0;
+        let lastOdomMaxR = 0.5;
+        let lastOdomData = null;
+
+        // ── Pan & Zoom handlers ──────────────────────────────────────
+        odomCanvas.addEventListener('wheel', function(e) {
+            e.preventDefault();
+            const zoomFactor = e.deltaY < 0 ? 1.15 : 0.87;
+            odomZoom = Math.max(0.1, Math.min(50, odomZoom * zoomFactor));
+            odomUserZoom = true;
+            if (lastOdomData) drawOdomMap(lastOdomData);
+        }, {passive: false});
+
+        // Helper: convert canvas pixel to map coords
+        function canvasToMap(canvasX, canvasY) {
             const W = odomCanvas.width, H = odomCanvas.height;
-            const cx = W / 2, cy = H / 2;
+            const cx2 = W / 2 + odomPanX;
+            const cy2 = H / 2 + odomPanY;
+            const scale = lastOdomScale * odomZoom;
+            if (scale < 0.001) return null;
+            const my = (cx2 - canvasX) / scale;
+            const mx = (cy2 - canvasY) / scale;
+            return {x: mx, y: my};
+        }
+
+        // Helper: map coords to canvas pixel
+        function mapToCanvas(mx, my) {
+            const W = odomCanvas.width, H = odomCanvas.height;
+            const cx2 = W / 2 + odomPanX;
+            const cy2 = H / 2 + odomPanY;
+            const scale = lastOdomScale * odomZoom;
+            return [cx2 - my * scale, cy2 - mx * scale];
+        }
+
+        // Helper: find waypoint index near canvas pixel, or -1
+        function hitTestWaypoint(canvasX, canvasY) {
+            for (let i = 0; i < odomWaypoints.length; i++) {
+                const [wpx, wpy] = mapToCanvas(odomWaypoints[i].x, odomWaypoints[i].y);
+                const dx = canvasX - wpx, dy = canvasY - wpy;
+                if (Math.sqrt(dx*dx + dy*dy) <= WAYPOINT_HIT_RADIUS) return i;
+            }
+            return -1;
+        }
+
+        // Update UI buttons & label after waypoint list changes
+        function syncWaypointUI() {
+            const n = odomWaypoints.length;
+            odomWpTarget.textContent = n > 0 ? (n + ' waypoint' + (n > 1 ? 's' : '')) : 'idle';
+            odomNavBtn.style.display = n > 0 ? '' : 'none';
+            odomClearWpBtn.style.display = n > 0 ? '' : 'none';
+            odomUndoWpBtn.style.display = n > 0 ? '' : 'none';
+            replanPath();
+            if (lastOdomData) drawOdomMap(lastOdomData);
+        }
+
+        odomCanvas.addEventListener('mousedown', function(e) {
+            if (e.button === 0) { // left button
+                // Check if clicking on existing waypoint to drag it
+                const hitIdx = hitTestWaypoint(e.offsetX, e.offsetY);
+                if (hitIdx >= 0) {
+                    odomDragWpIdx = hitIdx;
+                    odomCanvas.style.cursor = 'move';
+                    return;
+                }
+                odomDragging = true;
+                odomDragStartX = e.offsetX;
+                odomDragStartY = e.offsetY;
+                odomPanStartX = odomPanX;
+                odomPanStartY = odomPanY;
+                odomCanvas.style.cursor = 'grabbing';
+            }
+        });
+        odomCanvas.addEventListener('mousemove', function(e) {
+            if (odomDragWpIdx >= 0) {
+                // Dragging a waypoint
+                const pt = canvasToMap(e.offsetX, e.offsetY);
+                if (pt) {
+                    odomWaypoints[odomDragWpIdx] = pt;
+                    replanPath();
+                    if (lastOdomData) drawOdomMap(lastOdomData);
+                }
+                return;
+            }
+            if (odomDragging) {
+                odomPanX = odomPanStartX + (e.offsetX - odomDragStartX);
+                odomPanY = odomPanStartY + (e.offsetY - odomDragStartY);
+                if (lastOdomData) drawOdomMap(lastOdomData);
+            }
+        });
+        odomCanvas.addEventListener('mouseup', function(e) {
+            if (odomDragWpIdx >= 0) {
+                // Finish waypoint drag
+                const pt = canvasToMap(e.offsetX, e.offsetY);
+                if (pt) odomWaypoints[odomDragWpIdx] = pt;
+                odomDragWpIdx = -1;
+                odomCanvas.style.cursor = 'crosshair';
+                syncWaypointUI();
+                return;
+            }
+            if (odomDragging) {
+                const dx = Math.abs(e.offsetX - odomDragStartX);
+                const dy = Math.abs(e.offsetY - odomDragStartY);
+                odomDragging = false;
+                odomCanvas.style.cursor = 'crosshair';
+                // If it was a real drag (>3px), don't place waypoint
+                if (dx > 3 || dy > 3) return;
+                // Click — add waypoint
+                const pt = canvasToMap(e.offsetX, e.offsetY);
+                if (pt) {
+                    odomWaypoints.push(pt);
+                    syncWaypointUI();
+                }
+            }
+        });
+        odomCanvas.addEventListener('mouseleave', function() {
+            odomDragging = false;
+            odomDragWpIdx = -1;
+            odomCanvas.style.cursor = 'crosshair';
+        });
+
+        // Double-click = add waypoint and start navigation immediately
+        odomCanvas.addEventListener('dblclick', function(e) {
+            e.preventDefault();
+            const pt = canvasToMap(e.offsetX, e.offsetY);
+            if (pt) {
+                odomWaypoints.push(pt);
+                syncWaypointUI();
+                navigatePath();
+            }
+        });
+
+        // Right-click: if near a waypoint remove it, else reset pan/zoom
+        odomCanvas.addEventListener('contextmenu', function(e) {
+            e.preventDefault();
+            const hitIdx = hitTestWaypoint(e.offsetX, e.offsetY);
+            if (hitIdx >= 0) {
+                odomWaypoints.splice(hitIdx, 1);
+                syncWaypointUI();
+            } else {
+                odomPanX = 0; odomPanY = 0;
+                odomZoom = 1.0; odomUserZoom = false;
+                if (lastOdomData) drawOdomMap(lastOdomData);
+            }
+        });
+
+        // Undo last waypoint
+        odomUndoWpBtn.addEventListener('click', function() {
+            if (odomWaypoints.length > 0) {
+                odomWaypoints.pop();
+                syncWaypointUI();
+            }
+        });
+
+        // Clear all waypoints
+        odomClearWpBtn.addEventListener('click', function() {
+            odomWaypoints = [];
+            odomPlannedPath = [];
+            syncWaypointUI();
+        });
+
+        // ── A* Path Planner ──────────────────────────────────────────
+        // Uses SLAM occupancy grid to plan obstacle-free path
+        function replanPath() {
+            odomPlannedPath = [];
+            if (odomWaypoints.length === 0) return;
+            // Build start→wp1→wp2→...→wpN chain
+            const robotPt = lastOdomData ? {x: lastOdomData.x, y: lastOdomData.y} : {x: 0, y: 0};
+            const chain = [robotPt].concat(odomWaypoints);
+            const fullPath = [];
+            for (let i = 0; i < chain.length - 1; i++) {
+                const seg = astarSegment(chain[i], chain[i+1]);
+                // Append segment (skip first point of subsequent segments to avoid dups)
+                if (seg && seg.length > 0) {
+                    const start = (i === 0) ? 0 : 1;
+                    for (let j = start; j < seg.length; j++) fullPath.push(seg[j]);
+                } else {
+                    // No SLAM data or direct path — just straight line
+                    if (i > 0 || fullPath.length === 0) fullPath.push(chain[i]);
+                    fullPath.push(chain[i+1]);
+                }
+            }
+            odomPlannedPath = fullPath;
+        }
+
+        function astarSegment(startPt, endPt) {
+            // If no SLAM data, return null (straight line fallback)
+            if (!lastMapData || !lastMapData.available || !lastMapBytes) return null;
+            const mw = lastMapData.width, mh = lastMapData.height;
+            const mres = lastMapData.resolution;
+            const ox = lastMapData.origin_x, oy = lastMapData.origin_y;
+            if (mw === 0 || mh === 0 || mres <= 0) return null;
+
+            // Convert map coords to grid cell
+            function toCell(pt) {
+                const col = Math.round((pt.y - oy) / mres);
+                const row = Math.round((pt.x - ox) / mres);
+                return [row, col];
+            }
+            function toWorld(row, col) {
+                return {x: ox + row * mres, y: oy + col * mres};
+            }
+
+            const [sr, sc] = toCell(startPt);
+            const [er, ec] = toCell(endPt);
+
+            // Inflate obstacles — build blocked set (inflate by robot radius ~0.15m)
+            const inflateR = Math.max(1, Math.ceil(0.15 / mres));
+            // For performance, build a typed array for inflated grid
+            const blocked = new Uint8Array(mw * mh);
+            for (let r = 0; r < mh; r++) {
+                for (let c = 0; c < mw; c++) {
+                    const v = lastMapBytes[r * mw + c];
+                    if (v !== 255 && v > 50) { // occupied
+                        // Inflate
+                        for (let dr = -inflateR; dr <= inflateR; dr++) {
+                            for (let dc = -inflateR; dc <= inflateR; dc++) {
+                                const nr = r + dr, nc = c + dc;
+                                if (nr >= 0 && nr < mh && nc >= 0 && nc < mw) {
+                                    blocked[nr * mw + nc] = 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Check start/end are in bounds
+            function inBounds(r, c) { return r >= 0 && r < mh && c >= 0 && c < mw; }
+            // If start or end is out of bounds or blocked, fallback to straight line
+            if (!inBounds(sr, sc) || !inBounds(er, ec)) return null;
+            // If start or end is in blocked area, try to find nearest free cell
+            function findFreeNear(r, c) {
+                if (inBounds(r, c) && !blocked[r * mw + c]) return [r, c];
+                for (let d = 1; d <= inflateR + 2; d++) {
+                    for (let dr = -d; dr <= d; dr++) {
+                        for (let dc = -d; dc <= d; dc++) {
+                            const nr = r + dr, nc = c + dc;
+                            if (inBounds(nr, nc) && !blocked[nr * mw + nc]) return [nr, nc];
+                        }
+                    }
+                }
+                return null;
+            }
+            const freeStart = findFreeNear(sr, sc);
+            const freeEnd = findFreeNear(er, ec);
+            if (!freeStart || !freeEnd) return null;
+            const [asr, asc] = freeStart;
+            const [aer, aec] = freeEnd;
+
+            // A* search (8-connected)
+            const SQRT2 = 1.414;
+            const dirs = [[-1,0,1],[1,0,1],[0,-1,1],[0,1,1],[-1,-1,SQRT2],[-1,1,SQRT2],[1,-1,SQRT2],[1,1,SQRT2]];
+            const key = (r, c) => r * mw + c;
+            const startKey = key(asr, asc);
+            const endKey = key(aer, aec);
+
+            // heuristic: octile distance
+            function heuristic(r, c) {
+                const dr = Math.abs(r - aer), dc = Math.abs(c - aec);
+                return Math.max(dr, dc) + (SQRT2 - 1) * Math.min(dr, dc);
+            }
+
+            // Simple binary heap for open set
+            const gScore = new Float32Array(mw * mh).fill(Infinity);
+            const fScore = new Float32Array(mw * mh).fill(Infinity);
+            const cameFrom = new Int32Array(mw * mh).fill(-1);
+            const closed = new Uint8Array(mw * mh);
+
+            gScore[startKey] = 0;
+            fScore[startKey] = heuristic(asr, asc);
+
+            // Min-heap using array
+            const open = [[fScore[startKey], startKey]]; // [f, key]
+            let found = false;
+            let iterations = 0;
+            const MAX_ITER = 50000; // prevent freezing on large maps
+
+            while (open.length > 0 && iterations < MAX_ITER) {
+                iterations++;
+                // Find min f in open (simple for moderate sizes)
+                let minIdx = 0;
+                for (let i = 1; i < open.length; i++) {
+                    if (open[i][0] < open[minIdx][0]) minIdx = i;
+                }
+                const [, curKey] = open[minIdx];
+                open[minIdx] = open[open.length - 1];
+                open.pop();
+
+                if (curKey === endKey) { found = true; break; }
+                if (closed[curKey]) continue;
+                closed[curKey] = 1;
+
+                const cr = Math.floor(curKey / mw), cc = curKey % mw;
+                for (const [dr, dc, cost] of dirs) {
+                    const nr = cr + dr, nc = cc + dc;
+                    if (!inBounds(nr, nc)) continue;
+                    const nk = key(nr, nc);
+                    if (closed[nk] || blocked[nk]) continue;
+                    const ng = gScore[curKey] + cost;
+                    if (ng < gScore[nk]) {
+                        gScore[nk] = ng;
+                        fScore[nk] = ng + heuristic(nr, nc);
+                        cameFrom[nk] = curKey;
+                        open.push([fScore[nk], nk]);
+                    }
+                }
+            }
+
+            if (!found) return null; // no path found — fallback to straight
+
+            // Reconstruct path
+            const rawPath = [];
+            let ck = endKey;
+            while (ck !== -1) {
+                const cr = Math.floor(ck / mw), cc = ck % mw;
+                rawPath.push(toWorld(cr, cc));
+                ck = cameFrom[ck];
+            }
+            rawPath.reverse();
+
+            // Path smoothing: line-of-sight skip
+            if (rawPath.length <= 2) return rawPath;
+            const smoothed = [rawPath[0]];
+            let ci = 0;
+            while (ci < rawPath.length - 1) {
+                let furthest = ci + 1;
+                for (let j = rawPath.length - 1; j > ci + 1; j--) {
+                    if (lineOfSight(rawPath[ci], rawPath[j], blocked, mw, mh, mres, ox, oy)) {
+                        furthest = j;
+                        break;
+                    }
+                }
+                smoothed.push(rawPath[furthest]);
+                ci = furthest;
+            }
+            return smoothed;
+        }
+
+        // Bresenham line-of-sight check through the inflated grid
+        function lineOfSight(a, b, blocked, mw, mh, mres, ox, oy) {
+            const c0 = Math.round((a.y - oy) / mres);
+            const r0 = Math.round((a.x - ox) / mres);
+            const c1 = Math.round((b.y - oy) / mres);
+            const r1 = Math.round((b.x - ox) / mres);
+            let dr = Math.abs(r1 - r0), dc = Math.abs(c1 - c0);
+            let r = r0, c = c0;
+            let sr = r0 < r1 ? 1 : -1, sc = c0 < c1 ? 1 : -1;
+            let err = dr - dc;
+            while (true) {
+                if (r < 0 || r >= mh || c < 0 || c >= mw) return false;
+                if (blocked[r * mw + c]) return false;
+                if (r === r1 && c === c1) break;
+                const e2 = 2 * err;
+                if (e2 > -dc) { err -= dc; r += sr; }
+                if (e2 < dr) { err += dr; c += sc; }
+            }
+            return true;
+        }
+
+        function drawOdomMap(data) {
+            lastOdomData = data;
+            const W = odomCanvas.width, H = odomCanvas.height;
             odomCtx.clearRect(0, 0, W, H);
 
-            // Determine scale from trail + path + current position
-            let maxR = 0.5; // minimum half-range in metres
+            // Determine auto-fit scale from trail + path + current position
+            let maxR = 0.5;
             const allPts = (data.trail || []).concat(data.path || []);
             allPts.push([data.x, data.y]);
-            allPts.push([0, 0]); // origin always visible
+            allPts.push([0, 0]);
+            for (const wp of odomWaypoints) allPts.push([wp.x, wp.y]);
+            for (const pp of odomPlannedPath) allPts.push([pp.x, pp.y]);
             for (const p of allPts) {
                 const ax = Math.abs(p[0]), ay = Math.abs(p[1]);
                 if (ax > maxR) maxR = ax;
                 if (ay > maxR) maxR = ay;
             }
-            maxR *= 1.2; // add margin
-            const scale = (Math.min(W, H) / 2 - 16) / maxR;
+            maxR *= 1.2;
+            lastOdomMaxR = maxR;
 
-            // Top-down view: +X (forward) = UP, +Y (left) = LEFT
+            const autoScale = (Math.min(W, H) / 2 - 16) / maxR;
+            lastOdomScale = autoScale;
+            const scale = autoScale * odomZoom;
+
+            const cx = W / 2 + odomPanX;
+            const cy = H / 2 + odomPanY;
+
             function toCanvas(mx, my) {
                 return [cx - my * scale, cy - mx * scale];
             }
@@ -1767,14 +2190,13 @@ INDEX_HTML = """<!doctype html>
                 for (let row = 0; row < mh; row++) {
                     for (let col = 0; col < mw; col++) {
                         const v = lastMapBytes[row * mw + col];
-                        if (v === 255) continue; // skip unknown
+                        if (v === 255) continue;
 
                         const wx = ox + col * mres;
                         const wy = oy + row * mres;
                         const pcx = cx - wy * scale;
                         const pcy = cy - wx * scale;
 
-                        // Skip off-screen cells
                         if (pcx < -cellPx || pcx > W || pcy < -cellPx || pcy > H) continue;
 
                         const occ = v / 100.0;
@@ -1787,18 +2209,19 @@ INDEX_HTML = """<!doctype html>
                 slamCellsEl.textContent = mappedCells;
             }
 
-            // Grid lines (auto-adjust spacing for zoom level)
+            // Grid lines
+            const visibleRange = maxR / odomZoom * 2;
             let gridStep = 0.5;
-            if (maxR > 5) gridStep = 2.0;
-            else if (maxR > 2) gridStep = 1.0;
+            if (visibleRange > 10) gridStep = 2.0;
+            else if (visibleRange > 4) gridStep = 1.0;
 
             odomCtx.strokeStyle = '#e8e8e8';
             odomCtx.lineWidth = 0.5;
             odomCtx.font = '9px ui-monospace, monospace';
             odomCtx.fillStyle = '#bbb';
             odomCtx.textAlign = 'left';
-            for (let g = gridStep; g <= maxR; g += gridStep) {
-                // Horizontal grid lines (constant X values → horizontal on canvas)
+            const gridMax = maxR * Math.max(3, 1 / odomZoom + 1);
+            for (let g = gridStep; g <= gridMax; g += gridStep) {
                 const [, gy1] = toCanvas(g, 0);
                 if (gy1 > 0 && gy1 < H) {
                     odomCtx.beginPath(); odomCtx.moveTo(0, gy1); odomCtx.lineTo(W, gy1); odomCtx.stroke();
@@ -1808,7 +2231,6 @@ INDEX_HTML = """<!doctype html>
                 if (gy2 > 0 && gy2 < H) {
                     odomCtx.beginPath(); odomCtx.moveTo(0, gy2); odomCtx.lineTo(W, gy2); odomCtx.stroke();
                 }
-                // Vertical grid lines (constant Y values → vertical on canvas)
                 const [gx1] = toCanvas(0, g);
                 if (gx1 > 0 && gx1 < W) {
                     odomCtx.beginPath(); odomCtx.moveTo(gx1, 0); odomCtx.lineTo(gx1, H); odomCtx.stroke();
@@ -1818,20 +2240,20 @@ INDEX_HTML = """<!doctype html>
                     odomCtx.beginPath(); odomCtx.moveTo(gx2, 0); odomCtx.lineTo(gx2, H); odomCtx.stroke();
                 }
             }
+
             // Axes through origin
             odomCtx.strokeStyle = '#ccc';
             odomCtx.lineWidth = 1;
             const [axOx, axOy] = toCanvas(0, 0);
-            odomCtx.beginPath(); odomCtx.moveTo(axOx, 0); odomCtx.lineTo(axOx, H); odomCtx.stroke(); // Y-axis line (vertical)
-            odomCtx.beginPath(); odomCtx.moveTo(0, axOy); odomCtx.lineTo(W, axOy); odomCtx.stroke(); // X-axis line (horizontal)
+            odomCtx.beginPath(); odomCtx.moveTo(axOx, 0); odomCtx.lineTo(axOx, H); odomCtx.stroke();
+            odomCtx.beginPath(); odomCtx.moveTo(0, axOy); odomCtx.lineTo(W, axOy); odomCtx.stroke();
 
             // Axis labels
             odomCtx.fillStyle = '#999';
             odomCtx.font = '10px ui-monospace, monospace';
             odomCtx.textAlign = 'center';
-            odomCtx.fillText('+X (fwd)', axOx, 12); // top = forward
+            if (axOy > 5 && axOy < H) odomCtx.fillText('+X (fwd)', axOx, Math.max(12, axOy - H/2 + 12));
             odomCtx.textAlign = 'right';
-            odomCtx.fillText('+Y (left)', 10 > axOx ? axOx - 4 : 10, axOy - 5);
 
             // Origin marker (orange dot)
             odomCtx.beginPath();
@@ -1855,7 +2277,6 @@ INDEX_HTML = """<!doctype html>
                 odomCtx.strokeStyle = 'rgba(0, 170, 0, 0.8)';
                 odomCtx.lineWidth = 3;
                 odomCtx.stroke();
-                // Start/end markers on recorded path
                 if (path.length >= 2) {
                     const [sx, sy] = toCanvas(path[0][0], path[0][1]);
                     odomCtx.beginPath(); odomCtx.arc(sx, sy, 3, 0, 2*Math.PI);
@@ -1882,11 +2303,68 @@ INDEX_HTML = """<!doctype html>
                 odomCtx.stroke();
             }
 
+            // ── A* planned path overlay (orange dashed) ─────────────
+            if (odomPlannedPath.length > 1) {
+                odomCtx.beginPath();
+                let [px0, py0] = toCanvas(odomPlannedPath[0].x, odomPlannedPath[0].y);
+                odomCtx.moveTo(px0, py0);
+                for (let i = 1; i < odomPlannedPath.length; i++) {
+                    const [px, py] = toCanvas(odomPlannedPath[i].x, odomPlannedPath[i].y);
+                    odomCtx.lineTo(px, py);
+                }
+                odomCtx.setLineDash([6, 4]);
+                odomCtx.strokeStyle = 'rgba(255, 136, 0, 0.7)';
+                odomCtx.lineWidth = 2.5;
+                odomCtx.stroke();
+                odomCtx.setLineDash([]);
+            }
+
+            // ── Waypoint connecting lines (dashed magenta) ──────────
+            if (odomWaypoints.length > 1) {
+                odomCtx.beginPath();
+                let [lx0, ly0] = toCanvas(odomWaypoints[0].x, odomWaypoints[0].y);
+                odomCtx.moveTo(lx0, ly0);
+                for (let i = 1; i < odomWaypoints.length; i++) {
+                    const [lx, ly] = toCanvas(odomWaypoints[i].x, odomWaypoints[i].y);
+                    odomCtx.lineTo(lx, ly);
+                }
+                odomCtx.setLineDash([4, 4]);
+                odomCtx.strokeStyle = 'rgba(200, 0, 200, 0.35)';
+                odomCtx.lineWidth = 1.5;
+                odomCtx.stroke();
+                odomCtx.setLineDash([]);
+            }
+
+            // ── Numbered waypoint markers ────────────────────────────
+            for (let wi = 0; wi < odomWaypoints.length; wi++) {
+                const wp = odomWaypoints[wi];
+                const [wpx, wpy] = toCanvas(wp.x, wp.y);
+                const r = 10;
+                // Circle background
+                odomCtx.beginPath();
+                odomCtx.arc(wpx, wpy, r, 0, 2 * Math.PI);
+                odomCtx.fillStyle = 'rgba(255, 0, 255, 0.5)';
+                odomCtx.fill();
+                odomCtx.strokeStyle = '#f0f';
+                odomCtx.lineWidth = 2;
+                odomCtx.stroke();
+                // Number label
+                odomCtx.fillStyle = '#fff';
+                odomCtx.font = 'bold 10px ui-monospace, monospace';
+                odomCtx.textAlign = 'center';
+                odomCtx.textBaseline = 'middle';
+                odomCtx.fillText(String(wi + 1), wpx, wpy);
+                // Coordinate below
+                odomCtx.fillStyle = '#c0c';
+                odomCtx.font = '9px ui-monospace, monospace';
+                odomCtx.textBaseline = 'top';
+                odomCtx.fillText('(' + wp.x.toFixed(1) + ',' + wp.y.toFixed(1) + ')', wpx, wpy + r + 2);
+            }
+            odomCtx.textBaseline = 'alphabetic'; // reset
+
             // Robot position (red dot) + heading arrow
             const [rx, ry] = toCanvas(data.x, data.y);
             const yawRad = (data.yaw_deg || 0) * Math.PI / 180;
-            // Heading arrow: in toCanvas frame, a displacement (dx_odom, dy_odom)
-            // maps to canvas (-dy_odom*s, -dx_odom*s). Heading dir = (cos(yaw), sin(yaw))
             const arrowLen = 18;
             const tipCx = rx - Math.sin(yawRad) * arrowLen;
             const tipCy = ry - Math.cos(yawRad) * arrowLen;
@@ -1898,7 +2376,6 @@ INDEX_HTML = """<!doctype html>
             odomCtx.lineWidth = 2.5;
             odomCtx.lineCap = 'round';
             odomCtx.stroke();
-            // Arrowhead
             const aAngle = Math.atan2(tipCy - ry, tipCx - rx);
             odomCtx.beginPath();
             odomCtx.moveTo(tipCx, tipCy);
@@ -1908,26 +2385,30 @@ INDEX_HTML = """<!doctype html>
             odomCtx.stroke();
             odomCtx.lineCap = 'butt';
 
-            // Robot dot
             odomCtx.beginPath();
             odomCtx.arc(rx, ry, 5, 0, 2 * Math.PI);
             odomCtx.fillStyle = '#e00';
             odomCtx.fill();
+
+            // Zoom indicator
+            odomCtx.fillStyle = 'rgba(0,0,0,0.35)';
+            odomCtx.font = '10px ui-monospace, monospace';
+            odomCtx.textAlign = 'right';
+            odomCtx.fillText('zoom: ' + odomZoom.toFixed(1) + 'x', W - 6, H - 6);
         }
 
         function updateOdomUI(d) {
-            odomX.textContent = d.x != null ? d.x.toFixed(3) : '\u2014';
-            odomY.textContent = d.y != null ? d.y.toFixed(3) : '\u2014';
-            odomYaw.textContent = d.yaw_deg != null ? d.yaw_deg.toFixed(1) : '\u2014';
+            odomX.textContent = d.x != null ? d.x.toFixed(3) : '\\u2014';
+            odomY.textContent = d.y != null ? d.y.toFixed(3) : '\\u2014';
+            odomYaw.textContent = d.yaw_deg != null ? d.yaw_deg.toFixed(1) : '\\u2014';
             const spd = Math.sqrt((d.vx||0)*(d.vx||0) + (d.vy||0)*(d.vy||0));
             odomSpeed.textContent = spd.toFixed(3) + ' m/s';
 
-            // Accumulate distance from position deltas
             if (odomPrevX !== null && odomPrevY !== null) {
                 const dx = (d.x||0) - odomPrevX;
                 const dy = (d.y||0) - odomPrevY;
                 const seg = Math.sqrt(dx*dx + dy*dy);
-                if (seg < 0.5) odomTotalDist += seg; // skip teleports
+                if (seg < 0.5) odomTotalDist += seg;
             }
             odomPrevX = d.x || 0;
             odomPrevY = d.y || 0;
@@ -1936,11 +2417,32 @@ INDEX_HTML = """<!doctype html>
             odomWpCount.textContent = String((d.path || []).length);
             odomTrailCount.textContent = String((d.trail || []).length);
 
-            // Update button visibility & status based on state
+            // Stuck detection banner
+            if (d.stuck) {
+                odomStuckBanner.style.display = '';
+            } else {
+                odomStuckBanner.style.display = 'none';
+            }
+
             odomRecording = !!d.recording;
             odomReturning = !!d.returning;
+            odomNavigating = !!d.navigating;
+
+            if (odomNavigating) {
+                const wpIdx = d.nav_wp_idx || 0;
+                const wpTotal = d.nav_wp_total || 0;
+                const progress = wpTotal > 0 ? (' ' + wpIdx + '/' + wpTotal) : '';
+                odomStatus.textContent = '\\u27a1 NAVIGATING' + progress;
+                odomStatus.style.color = '#a0a';
+                odomNavCancelBtn.style.display = '';
+                odomNavBtn.style.display = 'none';
+            } else {
+                odomNavCancelBtn.style.display = 'none';
+                if (odomWaypoints.length > 0) odomNavBtn.style.display = '';
+            }
+
             if (odomReturning) {
-                odomStatus.textContent = '\u21a9 RETURNING TO ORIGIN';
+                odomStatus.textContent = '\\u21a9 RETURNING TO ORIGIN';
                 odomStatus.style.color = '#05a';
                 odomCancelBtn.style.display = '';
                 odomReturnBtn.style.display = 'none';
@@ -1948,18 +2450,18 @@ INDEX_HTML = """<!doctype html>
                 odomCancelBtn.style.display = 'none';
                 odomReturnBtn.style.display = '';
                 if (odomRecording) {
-                    odomStatus.textContent = '\u23fa RECORDING';
+                    odomStatus.textContent = '\\u23fa RECORDING';
                     odomStatus.style.color = '#b00';
                     odomStartRecBtn.style.display = 'none';
                     odomStopRecBtn.style.display = '';
-                } else {
+                } else if (!odomNavigating) {
                     odomStartRecBtn.style.display = '';
                     odomStopRecBtn.style.display = 'none';
                     if (d.last_age_s != null && d.last_age_s < 2) {
                         odomStatus.textContent = 'active';
                         odomStatus.style.color = '#080';
                     } else {
-                        odomStatus.textContent = 'waiting for data\u2026';
+                        odomStatus.textContent = 'waiting for data\\u2026';
                         odomStatus.style.color = '#888';
                     }
                 }
@@ -1977,17 +2479,17 @@ INDEX_HTML = """<!doctype html>
             } catch(e) {}
         }
 
-        // Poll odometry at 5 Hz
         setInterval(fetchOdom, 200);
         fetchOdom();
+
+        const allOdomBtns = [odomSetOriginBtn, odomStartRecBtn, odomStopRecBtn,
+            odomReturnBtn, odomCancelBtn, odomNavBtn, odomNavCancelBtn, odomClearWpBtn, odomUndoWpBtn];
 
         async function odomServiceCall(endpoint) {
             if (odomBusy) return;
             odomBusy = true;
-            // Disable all odom buttons during call
-            [odomSetOriginBtn, odomStartRecBtn, odomStopRecBtn, odomReturnBtn, odomCancelBtn]
-                .forEach(b => b.disabled = true);
-            odomStatus.textContent = '\u231b working\u2026';
+            allOdomBtns.forEach(b => b.disabled = true);
+            odomStatus.textContent = '\\u231b working\\u2026';
             odomStatus.style.color = '#888';
             try {
                 const r = await fetch(endpoint, {method: 'POST'});
@@ -2001,9 +2503,37 @@ INDEX_HTML = """<!doctype html>
                 odomStatus.style.color = '#b00';
             } finally {
                 odomBusy = false;
-                [odomSetOriginBtn, odomStartRecBtn, odomStopRecBtn, odomReturnBtn, odomCancelBtn]
-                    .forEach(b => b.disabled = false);
-                // Immediately refresh state so buttons/status update right away
+                allOdomBtns.forEach(b => b.disabled = false);
+                await fetchOdom();
+            }
+        }
+
+        async function navigatePath() {
+            if (odomWaypoints.length === 0 || odomBusy) return;
+            // Replan to get latest A* path, then send the planned waypoints
+            replanPath();
+            const waypoints = odomPlannedPath.length > 1 ? odomPlannedPath : odomWaypoints;
+            odomBusy = true;
+            allOdomBtns.forEach(b => b.disabled = true);
+            odomStatus.textContent = '\\u27a1 NAVIGATING ' + odomWaypoints.length + ' waypoints\\u2026';
+            odomStatus.style.color = '#a0a';
+            try {
+                const r = await fetch('/api/odom/navigate_path', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({waypoints: waypoints.map(w => ({x: w.x, y: w.y}))}),
+                });
+                const d = await r.json();
+                if (d.message) {
+                    odomStatus.textContent = d.message;
+                    odomStatus.style.color = d.ok ? '#080' : '#b00';
+                }
+            } catch(e) {
+                odomStatus.textContent = 'error';
+                odomStatus.style.color = '#b00';
+            } finally {
+                odomBusy = false;
+                allOdomBtns.forEach(b => b.disabled = false);
                 await fetchOdom();
             }
         }
@@ -2012,17 +2542,22 @@ INDEX_HTML = """<!doctype html>
             odomTotalDist = 0.0;
             odomPrevX = null;
             odomPrevY = null;
-            // Optimistic UI: flash confirmation immediately
-            odomStatus.textContent = '\u231b resetting\u2026';
+            odomWaypoints = [];
+            odomPlannedPath = [];
+            odomWpTarget.textContent = 'idle';
+            odomNavBtn.style.display = 'none';
+            odomClearWpBtn.style.display = 'none';
+            odomUndoWpBtn.style.display = 'none';
+            odomPanX = 0; odomPanY = 0; odomZoom = 1.0; odomUserZoom = false;
+            odomStatus.textContent = '\\u231b resetting\\u2026';
             odomStatus.style.color = '#888';
             await odomServiceCall('/api/odom/set_origin');
         });
 
         odomStartRecBtn.addEventListener('click', async () => {
-            // Optimistic: swap buttons immediately
             odomStartRecBtn.style.display = 'none';
             odomStopRecBtn.style.display = '';
-            odomStatus.textContent = '\u23fa RECORDING';
+            odomStatus.textContent = '\\u23fa RECORDING';
             odomStatus.style.color = '#b00';
             await odomServiceCall('/api/odom/start_recording');
         });
@@ -2034,7 +2569,7 @@ INDEX_HTML = """<!doctype html>
         odomReturnBtn.addEventListener('click', async () => {
             odomReturnBtn.style.display = 'none';
             odomCancelBtn.style.display = '';
-            odomStatus.textContent = '\u21a9 RETURNING TO ORIGIN';
+            odomStatus.textContent = '\\u21a9 RETURNING TO ORIGIN';
             odomStatus.style.color = '#05a';
             await odomServiceCall('/api/odom/return_to_origin');
         });
@@ -2042,6 +2577,12 @@ INDEX_HTML = """<!doctype html>
             odomCancelBtn.style.display = 'none';
             odomReturnBtn.style.display = '';
             await odomServiceCall('/api/odom/cancel_return');
+        });
+        odomNavBtn.addEventListener('click', navigatePath);
+        odomNavCancelBtn.addEventListener('click', async () => {
+            odomNavCancelBtn.style.display = 'none';
+            if (odomWaypoints.length > 0) odomNavBtn.style.display = '';
+            await odomServiceCall('/api/odom/cancel_navigate');
         });
 
         // ── SLAM map polling (1 Hz) ──────────────────────────────────
@@ -2129,10 +2670,12 @@ INDEX_HTML = """<!doctype html>
         const lidarZoomSlider = document.getElementById('lidarZoom');
         const lidarZoomVal = document.getElementById('lidarZoomVal');
         let lidarManualRange = 0; // 0 = auto
+        let lidarSmoothedRange = 0; // EMA-smoothed auto range (0 = uninitialised)
 
         lidarZoomSlider.addEventListener('input', () => {
             lidarManualRange = parseFloat(lidarZoomSlider.value);
             lidarZoomVal.textContent = lidarManualRange > 0 ? lidarManualRange.toFixed(1) + ' m' : 'auto';
+            if (lidarManualRange > 0) lidarSmoothedRange = 0; // reset when switching to manual
         });
 
         function drawLidarScan(data) {
@@ -2159,11 +2702,20 @@ INDEX_HTML = """<!doctype html>
                     const r = ranges[i];
                     if (r >= rangeMin && r <= rangeMax) valid.push(r);
                 }
+                let rawR = 1.0;
                 if (valid.length > 0) {
                     valid.sort((a, b) => a - b);
-                    maxR = valid[Math.floor(valid.length * 0.95)] * 1.15;
-                    if (maxR < 0.5) maxR = 0.5;
+                    rawR = valid[Math.floor(valid.length * 0.95)] * 1.15;
+                    if (rawR < 0.5) rawR = 0.5;
                 }
+                // Smooth via EMA to prevent jittery zoom on noisy scans
+                if (lidarSmoothedRange <= 0) {
+                    lidarSmoothedRange = rawR; // first frame — snap
+                } else {
+                    const alpha = 0.08; // low alpha = smoother (0.05–0.15 is good)
+                    lidarSmoothedRange += alpha * (rawR - lidarSmoothedRange);
+                }
+                maxR = lidarSmoothedRange;
             }
             const scale = (Math.min(W, H) / 2 - 20) / maxR;
 
@@ -2572,13 +3124,16 @@ class WebVideoNode(Node):
         self.declare_parameter("imu_temperature_topic", "imu/temperature")
         self.declare_parameter("imu_mic_topic", "imu/mic_level")
         # Rotate-to-angle controller params
-        self.declare_parameter("rotate_kp", 1.0)       # proportional gain
-        self.declare_parameter("rotate_ki", 0.3)       # integral gain (overcomes friction near target)
-        self.declare_parameter("rotate_kd", 1.2)       # derivative gain (strong braking via gyro yaw rate)
-        self.declare_parameter("rotate_ramp_deg", 30.0) # error angle at which output reaches max speed
+        # NOTE: P and D are normalised — error ÷ ramp_deg, rate ÷ max_rate_dps
+        # so gains are directly comparable (1.0 = full output at boundary).
+        self.declare_parameter("rotate_kp", 2.5)       # proportional gain (normalised error)
+        self.declare_parameter("rotate_ki", 0.5)       # integral gain (overcomes friction near target)
+        self.declare_parameter("rotate_kd", 0.5)       # derivative gain (normalised gyro rate)
+        self.declare_parameter("rotate_ramp_deg", 30.0) # error angle at which P-term reaches kp
         self.declare_parameter("rotate_tolerance_deg", 2.0)
-        self.declare_parameter("rotate_settle_sec", 0.5)
-        self.declare_parameter("rotate_integral_max", 15.0)  # anti-windup cap (deg·s)
+        self.declare_parameter("rotate_settle_sec", 0.4)
+        self.declare_parameter("rotate_integral_max", 0.5)  # anti-windup cap (normalised·s)
+        self.declare_parameter("rotate_min_output", 0.06)   # minimum |angular_unit| to overcome motor deadband
 
         imu_data_topic = str(self.get_parameter("imu_data_topic").value)
         imu_yaw_topic = str(self.get_parameter("imu_yaw_topic").value)
@@ -2609,6 +3164,7 @@ class WebVideoNode(Node):
         self._rotate_tolerance = float(self.get_parameter("rotate_tolerance_deg").value)
         self._rotate_settle_sec = float(self.get_parameter("rotate_settle_sec").value)
         self._rotate_integral_max = float(self.get_parameter("rotate_integral_max").value)
+        self._rotate_min_output = float(self.get_parameter("rotate_min_output").value)
         self._rotate_in_tolerance_since = None
         self._rotate_integral = 0.0
         self._rotate_prev_error = None
@@ -2764,6 +3320,12 @@ class WebVideoNode(Node):
         self._odom_last_monotonic = 0.0
         self._odom_recording = False
         self._odom_returning = False
+        self._odom_stuck = False
+        self._odom_navigating = False
+        self._odom_nav_wp_idx = 0
+        self._odom_nav_wp_total = 0
+        self._odom_nav_target_x = 0.0
+        self._odom_nav_target_y = 0.0
         self._odom_path_xy: list = []  # [(x, y), ...] from Path messages
         self._odom_trail_xy: list = []  # live breadcrumb trail from Odometry
 
@@ -2779,6 +3341,12 @@ class WebVideoNode(Node):
         self._odom_returning_sub = self.create_subscription(
             Bool, odom_returning_topic, self._on_odom_returning, 10
         )
+        self._odom_stuck_sub = self.create_subscription(
+            Bool, 'odom/stuck', self._on_odom_stuck, 10
+        )
+        self._odom_nav_status_sub = self.create_subscription(
+            String, 'odom/nav_status', self._on_odom_nav_status, 10
+        )
 
         # Service clients for odometry services
         self._odom_set_origin_cli = self.create_client(Trigger, 'odom/set_origin')
@@ -2786,6 +3354,13 @@ class WebVideoNode(Node):
         self._odom_stop_recording_cli = self.create_client(Trigger, 'odom/stop_recording')
         self._odom_return_to_origin_cli = self.create_client(Trigger, 'odom/return_to_origin')
         self._odom_cancel_return_cli = self.create_client(Trigger, 'odom/cancel_return')
+        self._odom_cancel_navigate_cli = self.create_client(Trigger, 'odom/cancel_navigate')
+
+        # Publisher for navigate-to-waypoint commands
+        from geometry_msgs.msg import Point
+        self._odom_navigate_to_pub = self.create_publisher(Point, 'odom/navigate_to', 10)
+        # Publisher for multi-waypoint path navigation
+        self._odom_navigate_path_pub = self.create_publisher(Path, 'odom/navigate_path', 10)
 
         self.get_logger().info(
             f"Odometry topics: odom={odom_topic}, path={odom_path_topic}, "
@@ -3031,6 +3606,8 @@ class WebVideoNode(Node):
                 'yaw_deg': round(self._odom_yaw_deg, 2),
                 'recording': bool(self._odom_recording),
                 'returning': bool(self._odom_returning),
+                'stuck': bool(self._odom_stuck),
+                'navigating': bool(self._odom_navigating),
             },
         }
 
@@ -3577,6 +4154,25 @@ class WebVideoNode(Node):
     def _on_odom_returning(self, msg: Bool) -> None:
         self._odom_returning = msg.data
 
+    def _on_odom_stuck(self, msg: Bool) -> None:
+        self._odom_stuck = msg.data
+
+    def _on_odom_nav_status(self, msg: String) -> None:
+        # e.g. "navigating 2/5", "nav: arrived", "nav: cancelled", "idle"
+        txt = msg.data
+        self._odom_navigating = txt.startswith('navigating')
+        # Parse waypoint progress: "navigating 2/5"
+        if txt.startswith('navigating') and '/' in txt:
+            try:
+                parts = txt.split()[-1].split('/')
+                self._odom_nav_wp_idx = int(parts[0])
+                self._odom_nav_wp_total = int(parts[1])
+            except Exception:
+                pass
+        elif not self._odom_navigating:
+            self._odom_nav_wp_idx = 0
+            self._odom_nav_wp_total = 0
+
     def get_odom_dict(self) -> dict:
         now = time.monotonic()
         age = None
@@ -3591,6 +4187,10 @@ class WebVideoNode(Node):
             'wz': round(self._odom_wz, 3),
             'recording': bool(self._odom_recording),
             'returning': bool(self._odom_returning),
+            'stuck': bool(self._odom_stuck),
+            'navigating': bool(self._odom_navigating),
+            'nav_wp_idx': self._odom_nav_wp_idx,
+            'nav_wp_total': self._odom_nav_wp_total,
             'trail': list(self._odom_trail_xy),  # send full trail (up to 2000 points)
             'path': self._odom_path_xy,
             'last_age_s': age,
@@ -3628,6 +4228,33 @@ class WebVideoNode(Node):
 
     def odom_cancel_return(self) -> dict:
         return self._call_trigger_service(self._odom_cancel_return_cli, 'odom/cancel_return')
+
+    def odom_navigate_to(self, x: float, y: float) -> dict:
+        from geometry_msgs.msg import Point
+        msg = Point()
+        msg.x = float(x)
+        msg.y = float(y)
+        msg.z = 0.0
+        self._odom_navigate_to_pub.publish(msg)
+        self.get_logger().info(f"[odom] Published navigate_to ({x:.3f}, {y:.3f})")
+        return {'ok': True, 'message': f'Navigating to ({x:.2f}, {y:.2f})'}
+
+    def odom_navigate_path(self, waypoints: list) -> dict:
+        from nav_msgs.msg import Path as NavPath
+        from geometry_msgs.msg import PoseStamped
+        msg = NavPath()
+        msg.header.frame_id = 'odom'
+        for wp in waypoints:
+            ps = PoseStamped()
+            ps.pose.position.x = float(wp['x'])
+            ps.pose.position.y = float(wp['y'])
+            msg.poses.append(ps)
+        self._odom_navigate_path_pub.publish(msg)
+        self.get_logger().info(f"[odom] Published navigate_path with {len(waypoints)} waypoints")
+        return {'ok': True, 'message': f'Navigating {len(waypoints)}-waypoint path'}
+
+    def odom_cancel_navigate(self) -> dict:
+        return self._call_trigger_service(self._odom_cancel_navigate_cli, 'odom/cancel_navigate')
 
     # ── LiDAR scan integration ────────────────────────────────────
 
@@ -3816,8 +4443,11 @@ class WebVideoNode(Node):
         dt = min(dt, 0.1)  # safety cap
         self._rotate_last_time = now
 
-        # Check if within tolerance
-        if abs(error) < self._rotate_tolerance:
+        yaw_rate = self._imu_gyro[2]  # °/s from IMU
+
+        # Check if within tolerance — also require low yaw rate to avoid
+        # counting a fast pass-through as "settled".
+        if abs(error) < self._rotate_tolerance and abs(yaw_rate) < 8.0:
             if self._rotate_in_tolerance_since is None:
                 self._rotate_in_tolerance_since = now
             elif (now - self._rotate_in_tolerance_since) >= self._rotate_settle_sec:
@@ -3834,19 +4464,27 @@ class WebVideoNode(Node):
         else:
             self._rotate_in_tolerance_since = None
 
-        # ── PID controller ────────────────────────────────────────
-        yaw_rate = self._imu_gyro[2]  # °/s from IMU
+        # ── Normalised PID controller ─────────────────────────────
+        # Both error and yaw rate are normalised to [−1, 1] so that
+        # the P and D gains are directly comparable and the D term
+        # cannot overwhelm P at approach speeds.
         ramp = max(self._rotate_ramp_deg, 1.0)
+        max_rate_dps = self._rotate_speed * self._max_angular_rps * 57.2958
+        if max_rate_dps < 1.0:
+            max_rate_dps = 1.0
 
-        # P: proportional to heading error
-        p_term = self._rotate_kp * error
+        error_norm = error / ramp            # [-1, 1] at ± ramp_deg
+        rate_norm = yaw_rate / max_rate_dps  # [-1, 1] at max slew rate
+
+        # P: proportional to normalised heading error
+        p_term = self._rotate_kp * error_norm
 
         # I: only accumulate near the target to overcome friction
         #    during final settling — prevents integral windup during
         #    the high-speed slew phase.
         near_target = abs(error) < self._rotate_tolerance * 3.0  # within ~6°
         if near_target:
-            self._rotate_integral += error * dt
+            self._rotate_integral += error_norm * dt
             self._rotate_integral = max(-self._rotate_integral_max,
                                          min(self._rotate_integral_max,
                                              self._rotate_integral))
@@ -3856,25 +4494,26 @@ class WebVideoNode(Node):
         # Reduce integral on zero-crossing to cut overshoot
         if (self._rotate_prev_error is not None
                 and error * self._rotate_prev_error < 0):
-            self._rotate_integral *= 0.25
+            self._rotate_integral *= 0.3
         self._rotate_prev_error = error
         i_term = self._rotate_ki * self._rotate_integral
 
-        # D: strong gyro-rate braking (prevents overshoot / oscillation)
-        d_term = -self._rotate_kd * yaw_rate
+        # D: gyro-rate braking, normalised so D=kd when rate=max_rate
+        d_term = -self._rotate_kd * rate_norm
 
-        raw = p_term + i_term + d_term
-
-        # Normalize: output reaches ±1.0 at ±ramp_deg of error
-        angular_unit = raw / ramp
+        angular_unit = p_term + i_term + d_term
 
         # Clamp to requested speed
         angular_unit = max(-self._rotate_speed,
                            min(self._rotate_speed, angular_unit))
 
-        # No smoothing — direct PD/PID output is needed so braking
-        # commands take effect immediately (smoothing caused massive
-        # overshoot by delaying deceleration).
+        # Apply minimum output to overcome motor dead-band near target.
+        # Only when actively correcting (not within tolerance settling).
+        if abs(error) >= self._rotate_tolerance * 0.3:
+            min_out = self._rotate_min_output
+            if 0.0 < abs(angular_unit) < min_out:
+                angular_unit = min_out if angular_unit > 0 else -min_out
+
         self._rotate_last_output = angular_unit
 
         msg = Twist()
@@ -3925,6 +4564,9 @@ def make_handler(
     odom_stop_recording=None,
     odom_return_to_origin=None,
     odom_cancel_return=None,
+    odom_navigate_to=None,
+    odom_navigate_path=None,
+    odom_cancel_navigate=None,
     scan_provider=None,
     map_provider=None,
     lidar_zones_provider=None,
@@ -4974,10 +5616,57 @@ def make_handler(
                 '/api/odom/stop_recording': odom_stop_recording,
                 '/api/odom/return_to_origin': odom_return_to_origin,
                 '/api/odom/cancel_return': odom_cancel_return,
+                '/api/odom/cancel_navigate': odom_cancel_navigate,
                 '/api/slam/reset': slam_reset,
                 '/api/calibrate_front': calibrate_front,
                 '/api/calibrate_front_static': calibrate_front_static,
             }
+
+            # Navigate multi-waypoint path (needs JSON body)
+            if path == '/api/odom/navigate_path':
+                if callable(odom_navigate_path):
+                    try:
+                        content_length = int(self.headers.get('Content-Length', 0))
+                        body = self.rfile.read(content_length) if content_length else b'{}'
+                        import json as _json
+                        payload = _json.loads(body)
+                        wps = payload.get('waypoints', [])
+                        result = odom_navigate_path(wps)
+                    except Exception as exc:
+                        result = {'ok': False, 'message': str(exc)}
+                else:
+                    result = {'ok': False, 'message': 'navigate_path not available'}
+                import json as _json
+                payload_bytes = _json.dumps(result).encode()
+                self.send_response(HTTPStatus.OK)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(payload_bytes)))
+                self.end_headers()
+                self.wfile.write(payload_bytes)
+                return
+
+            # Navigate-to-waypoint (needs JSON body)
+            if path == '/api/odom/navigate_to':
+                if callable(odom_navigate_to):
+                    try:
+                        content_length = int(self.headers.get('Content-Length', 0))
+                        body = self.rfile.read(content_length) if content_length else b'{}'
+                        import json as _json
+                        payload = _json.loads(body)
+                        result = odom_navigate_to(payload.get('x', 0.0), payload.get('y', 0.0))
+                    except Exception as exc:
+                        result = {'ok': False, 'message': str(exc)}
+                else:
+                    result = {'ok': False, 'message': 'navigate_to not available'}
+                import json as _json
+                payload_bytes = _json.dumps(result).encode()
+                self.send_response(HTTPStatus.OK)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(payload_bytes)))
+                self.end_headers()
+                self.wfile.write(payload_bytes)
+                return
+
             if path in odom_service_map:
                 handler_fn = odom_service_map[path]
                 if not callable(handler_fn):
@@ -5063,6 +5752,9 @@ def main() -> None:
         odom_stop_recording=node.odom_stop_recording,
         odom_return_to_origin=node.odom_return_to_origin,
         odom_cancel_return=node.odom_cancel_return,
+        odom_navigate_to=node.odom_navigate_to,
+        odom_navigate_path=node.odom_navigate_path,
+        odom_cancel_navigate=node.odom_cancel_navigate,
         scan_provider=node.get_scan_dict,
         map_provider=node.get_map_dict,
         lidar_zones_provider=node.get_lidar_zones_dict,
