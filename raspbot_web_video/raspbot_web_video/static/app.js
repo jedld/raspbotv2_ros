@@ -65,77 +65,85 @@ const pan = document.getElementById('pan');
             tiltVal.textContent = String(tilt.value);
         }
 
+        function updateStatusUI(j) {
+            if (j.gimbal) {
+                if (j.gimbal.limits) {
+                    pan.min = j.gimbal.limits.pan_min_deg;
+                    pan.max = j.gimbal.limits.pan_max_deg;
+                    tilt.min = j.gimbal.limits.tilt_min_deg;
+                    tilt.max = j.gimbal.limits.tilt_max_deg;
+                }
+                if (j.gimbal.state) {
+                    pan.value = Math.round(j.gimbal.state.pan_deg);
+                    tilt.value = Math.round(j.gimbal.state.tilt_deg);
+                    updateLabels();
+                }
+            }
+            statusEl.textContent = `frames=${j.frame_count ?? '?'} last_frame_age_s=${j.last_frame_age_s ?? 'null'}`;
+            if (j.tracking) {
+                const enabled = Boolean(j.tracking.enabled);
+                setTrackingUi(enabled);
+                if (typeof j.tracking.pan_sign === 'number') {
+                    invPanChk.checked = (Number(j.tracking.pan_sign) < 0);
+                }
+                if (typeof j.tracking.tilt_sign === 'number') {
+                    invTiltChk.checked = (Number(j.tracking.tilt_sign) < 0);
+                }
+                if (typeof j.tracking.selected_person_id === 'number') {
+                    selectedPersonId = j.tracking.selected_person_id;
+                    updateSelectionUi();
+                }
+            }
+            if (j.follow) {
+                setFollowUi(Boolean(j.follow.enabled));
+                if (typeof j.follow.target_bbox_area === 'number' && !userRecentlyTouched(followDist)) {
+                    followDist.value = j.follow.target_bbox_area.toFixed(2);
+                    followDistVal.textContent = j.follow.target_bbox_area.toFixed(2);
+                }
+                if (typeof j.follow.max_linear === 'number' && !userRecentlyTouched(followSpeed)) {
+                    followSpeed.value = j.follow.max_linear.toFixed(2);
+                    followSpeedVal.textContent = j.follow.max_linear.toFixed(2);
+                }
+                if (typeof j.follow.strafe_gain === 'number' && !userRecentlyTouched(followStrafe)) {
+                    followStrafe.value = j.follow.strafe_gain.toFixed(2);
+                    followStrafeVal.textContent = j.follow.strafe_gain.toFixed(2);
+                }
+                if (typeof j.follow.gyro_damping === 'number' && !userRecentlyTouched(followGyroDamp)) {
+                    followGyroDamp.value = j.follow.gyro_damping.toFixed(2);
+                    followGyroDampVal.textContent = j.follow.gyro_damping.toFixed(2);
+                }
+            }
+            if (_onStatusCollisionCliff) _onStatusCollisionCliff(j);
+        }
+
+        function updateMapUI(d) {
+            if (d.available) {
+                lastMapData = d;
+                const raw = atob(d.data);
+                const arr = new Uint8Array(raw.length);
+                for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+                lastMapBytes = arr;
+                slamStatusEl.textContent = d.width + '\u00d7' + d.height + ' (' + d.age_s + 's)';
+                slamStatusEl.style.color = '#080';
+            } else {
+                slamStatusEl.textContent = 'no data';
+                slamStatusEl.style.color = '#888';
+            }
+        }
+
+        function updateDetectionsUI(j) {
+            latestDet = j;
+            lastDetFetchMs = Date.now();
+            const n = Array.isArray(j.detections) ? j.detections.length : 0;
+            detStateEl.textContent = `n=${n}`;
+        }
+
         async function fetchStatus() {
             try {
                 const r = await guardedFetch('/status');
                 const j = await r.json();
-                if (j.gimbal) {
-                    if (j.gimbal.limits) {
-                        pan.min = j.gimbal.limits.pan_min_deg;
-                        pan.max = j.gimbal.limits.pan_max_deg;
-                        tilt.min = j.gimbal.limits.tilt_min_deg;
-                        tilt.max = j.gimbal.limits.tilt_max_deg;
-                    }
-                    if (j.gimbal.state) {
-                        pan.value = Math.round(j.gimbal.state.pan_deg);
-                        tilt.value = Math.round(j.gimbal.state.tilt_deg);
-                        updateLabels();
-                    }
-                }
-                statusEl.textContent = `frames=${j.frame_count ?? '?'} last_frame_age_s=${j.last_frame_age_s ?? 'null'}`;
-                if (j.tracking) {
-                    const enabled = Boolean(j.tracking.enabled);
-                    setTrackingUi(enabled);
-
-                    // Optional runtime tuning
-                    if (typeof j.tracking.pan_sign === 'number') {
-                        invPanChk.checked = (Number(j.tracking.pan_sign) < 0);
-                    }
-                    if (typeof j.tracking.tilt_sign === 'number') {
-                        invTiltChk.checked = (Number(j.tracking.tilt_sign) < 0);
-                    }
-                    // Sync person selection state from server
-                    if (typeof j.tracking.selected_person_id === 'number') {
-                        selectedPersonId = j.tracking.selected_person_id;
-                        updateSelectionUi();
-                    }
-                }
-                if (j.follow) {
-                    setFollowUi(Boolean(j.follow.enabled));
-                    if (typeof j.follow.target_bbox_area === 'number' && !userRecentlyTouched(followDist)) {
-                        followDist.value = j.follow.target_bbox_area.toFixed(2);
-                        followDistVal.textContent = j.follow.target_bbox_area.toFixed(2);
-                    }
-                    if (typeof j.follow.max_linear === 'number' && !userRecentlyTouched(followSpeed)) {
-                        followSpeed.value = j.follow.max_linear.toFixed(2);
-                        followSpeedVal.textContent = j.follow.max_linear.toFixed(2);
-                    }
-                    if (typeof j.follow.strafe_gain === 'number' && !userRecentlyTouched(followStrafe)) {
-                        followStrafe.value = j.follow.strafe_gain.toFixed(2);
-                        followStrafeVal.textContent = j.follow.strafe_gain.toFixed(2);
-                    }
-                    if (typeof j.follow.gyro_damping === 'number' && !userRecentlyTouched(followGyroDamp)) {
-                        followGyroDamp.value = j.follow.gyro_damping.toFixed(2);
-                        followGyroDampVal.textContent = j.follow.gyro_damping.toFixed(2);
-                    }
-                }
-                if (_onStatusCollisionCliff) _onStatusCollisionCliff(j);
-
-                // Handle map data from combined status response
-                if (j.map) {
-                    if (j.map.available) {
-                        lastMapData = j.map;
-                        const raw = atob(j.map.data);
-                        const arr = new Uint8Array(raw.length);
-                        for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
-                        lastMapBytes = arr;
-                        slamStatusEl.textContent = j.map.width + '\u00d7' + j.map.height + ' (' + j.map.age_s + 's)';
-                        slamStatusEl.style.color = '#080';
-                    } else {
-                        slamStatusEl.textContent = 'no data';
-                        slamStatusEl.style.color = '#888';
-                    }
-                }
+                updateStatusUI(j);
+                if (j.map) updateMapUI(j.map);
             } catch (e) {
                 if (e.name !== 'AbortError') statusEl.textContent = 'status error';
             }
@@ -643,8 +651,7 @@ const pan = document.getElementById('pan');
         });
 
         updateLabels();
-        polled(fetchStatus, 1000);
-        // fetchDetections is now handled by fetchFast (combined endpoint)
+        // Polling is replaced by WebSocket — see connectWebSocket() at end of file
         drawOverlay();
 
         // ──────────────────────────────────────────────────────────────
@@ -1085,7 +1092,7 @@ const pan = document.getElementById('pan');
             } catch (e) { /* ignore */ }
         });
 
-        polled(fetchFast, 333);  // Combined: detections + imu
+        // fetchFast polling replaced by WebSocket
 
         // Front camera status
         const frontCamStatus = document.getElementById('frontCamStatus');
@@ -2475,7 +2482,7 @@ const pan = document.getElementById('pan');
                 if (j.lidar_zones) updateLidarZonesUI(j.lidar_zones);
             } catch(e) {}
         }
-        polled(fetchSensors, 500);
+        // fetchSensors polling replaced by WebSocket
 
         // ──────────────────────────────────────────────────────────────
         // Depth Map (Hailo-8 fast_depth)
@@ -2613,5 +2620,99 @@ const pan = document.getElementById('pan');
             });
             loadFaces();
         });
-        // Auto-load on page open, then poll every 10s
-        polled(loadFaces, 10000);
+        // Auto-load on page open; subsequent updates via WebSocket
+        loadFaces();
+
+        function renderFaces(facesData) {
+            const faces = facesData.faces || [];
+            faceCountEl.textContent = String(faces.length);
+            faceListEl.innerHTML = '';
+            faceMergePanel.style.display = faces.length >= 2 ? '' : 'none';
+            for (const f of faces) {
+                const card = document.createElement('div');
+                card.style.cssText = 'border:1px solid #dde0e4;border-radius:8px;padding:8px;background:#fafafa;';
+                const thumbUrl = '/api/faces/thumbnail?id=' + f.face_id;
+                card.innerHTML = `
+                    <img src="${thumbUrl}" alt="face" style="width:100%;height:80px;object-fit:cover;border-radius:4px;background:#eee;" onerror="this.style.background='#ddd';this.alt='No photo';" />
+                    <div style="margin-top:4px;font-size:12px;">
+                        <strong>ID ${f.face_id}</strong> &middot; ${f.num_embeddings} emb
+                    </div>
+                    <input type="text" value="${(f.name||'').replace(/"/g,'&quot;')}" data-fid="${f.face_id}"
+                        style="width:100%;margin-top:4px;padding:3px 6px;border:1px solid #ccc;border-radius:4px;font-size:12px;"
+                        placeholder="Name" />
+                    <div style="display:flex;gap:4px;margin-top:4px;">
+                        <button class="faceRenameBtn primary" data-fid="${f.face_id}" style="flex:1;font-size:11px;padding:3px 6px;">Save</button>
+                        <button class="faceDeleteBtn danger" data-fid="${f.face_id}" style="flex:1;font-size:11px;padding:3px 6px;">Delete</button>
+                    </div>`;
+                faceListEl.appendChild(card);
+            }
+            for (const btn of faceListEl.querySelectorAll('.faceRenameBtn')) {
+                btn.addEventListener('click', async () => {
+                    const fid = Number(btn.dataset.fid);
+                    const inp = faceListEl.querySelector(`input[data-fid="${fid}"]`);
+                    if (!inp) return;
+                    await fetch('/api/faces/rename', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({face_id: fid, name: inp.value})
+                    });
+                    loadFaces();
+                });
+            }
+            for (const btn of faceListEl.querySelectorAll('.faceDeleteBtn')) {
+                btn.addEventListener('click', async () => {
+                    const fid = Number(btn.dataset.fid);
+                    if (!confirm(`Delete face ID ${fid}?`)) return;
+                    await fetch('/api/faces/delete', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({face_id: fid})
+                    });
+                    loadFaces();
+                });
+            }
+        }
+
+        // ── WebSocket ───────────────────────────────────────────────
+        let _ws = null;
+        let _wsTimer = null;
+        const _wsIndicator = document.getElementById('status');
+
+        function connectWebSocket() {
+            if (_ws && (_ws.readyState === WebSocket.CONNECTING || _ws.readyState === WebSocket.OPEN)) return;
+            const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            _ws = new WebSocket(`${proto}//${location.host}/ws`);
+
+            _ws.onopen = () => {
+                console.log('[ws] connected');
+            };
+
+            _ws.onmessage = (ev) => {
+                try {
+                    const msg = JSON.parse(ev.data);
+                    if (msg.detections) updateDetectionsUI(msg.detections);
+                    if (msg.imu)         updateImuUI(msg.imu);
+                    if (msg.odom)        updateOdomUI(msg.odom);
+                    if (msg.lidar)       updateLidarUI(msg.lidar);
+                    if (msg.lidar_zones) updateLidarZonesUI(msg.lidar_zones);
+                    if (msg.status)      updateStatusUI(msg.status);
+                    if (msg.map)         updateMapUI(msg.map);
+                    if (msg.faces)       renderFaces(msg.faces);
+                } catch (e) {
+                    console.warn('[ws] parse error', e);
+                }
+            };
+
+            _ws.onclose = () => {
+                console.log('[ws] closed — reconnecting in 2s');
+                _ws = null;
+                clearTimeout(_wsTimer);
+                _wsTimer = setTimeout(connectWebSocket, 2000);
+            };
+
+            _ws.onerror = () => {
+                _ws.close();
+            };
+        }
+
+        connectWebSocket();

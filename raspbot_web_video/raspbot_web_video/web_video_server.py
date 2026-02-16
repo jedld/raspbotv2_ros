@@ -7,6 +7,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from urllib.parse import parse_qs, urlparse
 from typing import Optional
+import hashlib
+import base64
+import struct
+import socket
 
 import numpy as np
 
@@ -40,7 +44,7 @@ def _build_index_html():
         "</head>\n"
         "<body>\n"
         + body + "\n"
-        '<script src="/static/app.js"></script>\n'
+        '<script defer src="/static/app.js"></script>\n'
         "</body>\n"
         "</html>\n"
     )
@@ -48,6 +52,69 @@ def _build_index_html():
 
 INDEX_HTML = _build_index_html()
 
+
+# ── WebSocket helpers (RFC 6455) ──────────────────────────────────
+
+_WS_MAGIC = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+
+def _ws_accept_key(key: str) -> str:
+    return base64.b64encode(
+        hashlib.sha1((key.strip() + _WS_MAGIC).encode()).digest()
+    ).decode()
+
+
+def _recv_exact(sock, n: int) -> Optional[bytes]:
+    """Read exactly *n* bytes from *sock*. Returns None on disconnect."""
+    buf = b""
+    while len(buf) < n:
+        chunk = sock.recv(n - len(buf))
+        if not chunk:
+            return None
+        buf += chunk
+    return buf
+
+
+def _ws_send(sock, data: bytes, opcode: int = 0x01) -> None:
+    """Send a single WebSocket frame (server → client, unmasked)."""
+    hdr = bytes([0x80 | opcode])
+    length = len(data)
+    if length < 126:
+        hdr += bytes([length])
+    elif length < 65536:
+        hdr += bytes([126]) + struct.pack("!H", length)
+    else:
+        hdr += bytes([127]) + struct.pack("!Q", length)
+    sock.sendall(hdr + data)
+
+
+def _ws_recv(sock) -> Optional[tuple]:
+    """Read one WebSocket frame. Returns (opcode, payload) or None on close/error."""
+    hdr = _recv_exact(sock, 2)
+    if hdr is None:
+        return None
+    opcode = hdr[0] & 0x0F
+    masked = bool(hdr[1] & 0x80)
+    length = hdr[1] & 0x7F
+    if length == 126:
+        raw = _recv_exact(sock, 2)
+        if raw is None:
+            return None
+        length = struct.unpack("!H", raw)[0]
+    elif length == 127:
+        raw = _recv_exact(sock, 8)
+        if raw is None:
+            return None
+        length = struct.unpack("!Q", raw)[0]
+    mask = _recv_exact(sock, 4) if masked else None
+    if masked and mask is None:
+        return None
+    payload = _recv_exact(sock, length) if length > 0 else b""
+    if payload is None:
+        return None
+    if masked and mask:
+        payload = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+    return (opcode, payload)
 
 
 @dataclass
@@ -1882,6 +1949,141 @@ def make_handler(
                     self.wfile.flush()
                 except Exception:
                     pass
+                return
+
+            # ── WebSocket endpoint ───────────────────────────────────
+            if path == "/ws":
+                upgrade = self.headers.get("Upgrade", "").lower()
+                ws_key = self.headers.get("Sec-WebSocket-Key", "")
+                if upgrade != "websocket" or not ws_key:
+                    self.send_response(HTTPStatus.BAD_REQUEST)
+                    self.end_headers()
+                    return
+                accept = _ws_accept_key(ws_key)
+                self.protocol_version = "HTTP/1.1"
+                self.send_response(101, "Switching Protocols")
+                self.send_header("Upgrade", "websocket")
+                self.send_header("Connection", "Upgrade")
+                self.send_header("Sec-WebSocket-Accept", accept)
+                self.end_headers()
+                self.close_connection = True
+                try:
+                    self.wfile.flush()
+                except Exception:
+                    pass
+
+                sock = self.request
+                sock.setblocking(True)
+
+                # Push intervals (seconds)
+                FAST_IV = 0.333      # detections + imu
+                SENSORS_IV = 0.5     # odom + lidar + lidar_zones
+                STATUS_IV = 1.0      # status
+                MAP_IV = 2.0         # map
+                FACES_IV = 10.0      # face gallery
+
+                next_due = [0.0, 0.0, 0.0, 0.0, 0.0]
+
+                if logger:
+                    logger.info("WebSocket client connected")
+
+                try:
+                    while True:
+                        now = time.time()
+                        payload = {}
+
+                        if now >= next_due[0]:
+                            next_due[0] = now + FAST_IV
+                            if callable(detections_provider):
+                                try:
+                                    payload["detections"] = detections_provider()
+                                except Exception:
+                                    pass
+                            if callable(imu_provider):
+                                try:
+                                    payload["imu"] = imu_provider()
+                                except Exception:
+                                    pass
+
+                        if now >= next_due[1]:
+                            next_due[1] = now + SENSORS_IV
+                            if callable(odom_provider):
+                                try:
+                                    payload["odom"] = odom_provider()
+                                except Exception:
+                                    pass
+                            if callable(scan_provider):
+                                try:
+                                    payload["lidar"] = scan_provider()
+                                except Exception:
+                                    pass
+                            if callable(lidar_zones_provider):
+                                try:
+                                    payload["lidar_zones"] = lidar_zones_provider()
+                                except Exception:
+                                    pass
+
+                        if now >= next_due[2]:
+                            next_due[2] = now + STATUS_IV
+                            if callable(status_provider):
+                                try:
+                                    payload["status"] = status_provider()
+                                except Exception:
+                                    pass
+
+                        if now >= next_due[3]:
+                            next_due[3] = now + MAP_IV
+                            if callable(map_provider):
+                                try:
+                                    payload["map"] = map_provider()
+                                except Exception:
+                                    pass
+
+                        if now >= next_due[4]:
+                            next_due[4] = now + FACES_IV
+                            if callable(face_list):
+                                try:
+                                    payload["faces"] = {"faces": face_list()}
+                                except Exception:
+                                    pass
+
+                        if payload:
+                            data = json.dumps(payload).encode("utf-8")
+                            _ws_send(sock, data, 0x01)
+
+                        # Drain incoming frames (close / ping / pong)
+                        sock.settimeout(0.05)
+                        try:
+                            result = _ws_recv(sock)
+                            if result is None:
+                                break
+                            opcode, frame_data = result
+                            if opcode == 0x08:  # close
+                                try:
+                                    _ws_send(sock, b"", 0x08)
+                                except Exception:
+                                    pass
+                                break
+                            elif opcode == 0x09:  # ping
+                                _ws_send(sock, frame_data or b"", 0x0A)
+                        except (socket.timeout, BlockingIOError):
+                            pass
+                        finally:
+                            sock.settimeout(None)
+
+                        sleep_until = min(next_due)
+                        time.sleep(max(0.01, sleep_until - time.time()))
+
+                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError) as exc:
+                    if logger:
+                        logger.warning(f"WebSocket network error: {exc}")
+                except Exception as exc:
+                    if logger:
+                        import traceback
+                        logger.error(f"WebSocket unexpected error: {exc}\n{traceback.format_exc()}")
+                finally:
+                    if logger:
+                        logger.info("WebSocket client disconnected")
                 return
 
             if path.startswith("/status"):
