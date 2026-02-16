@@ -539,6 +539,25 @@ INDEX_HTML = """<!doctype html>
             return t && (Date.now() - t) < USER_INPUT_GRACE_MS;
         }
 
+        // ── Fetch utilities: AbortController timeout + in-flight guard ─
+        function guardedFetch(url, opts = {}, timeoutMs = 3000) {
+            const ac = new AbortController();
+            const tid = setTimeout(() => ac.abort(), timeoutMs);
+            return fetch(url, {...opts, signal: ac.signal})
+                .finally(() => clearTimeout(tid));
+        }
+        function polled(fn, ms) {
+            let busy = false;
+            const wrapped = async () => {
+                if (busy) return;
+                busy = true;
+                try { await fn(); } finally { busy = false; }
+            };
+            wrapped();
+            setInterval(wrapped, ms);
+        }
+        let _onStatusCollisionCliff = null;
+
         function updateLabels() {
             panVal.textContent = String(pan.value);
             tiltVal.textContent = String(tilt.value);
@@ -546,7 +565,7 @@ INDEX_HTML = """<!doctype html>
 
         async function fetchStatus() {
             try {
-                const r = await fetch('/status');
+                const r = await guardedFetch('/status');
                 const j = await r.json();
                 if (j.gimbal) {
                     if (j.gimbal.limits) {
@@ -598,8 +617,9 @@ INDEX_HTML = """<!doctype html>
                         followGyroDampVal.textContent = j.follow.gyro_damping.toFixed(2);
                     }
                 }
+                if (_onStatusCollisionCliff) _onStatusCollisionCliff(j);
             } catch (e) {
-                statusEl.textContent = 'status error';
+                if (e.name !== 'AbortError') statusEl.textContent = 'status error';
             }
         }
 
@@ -864,7 +884,7 @@ INDEX_HTML = """<!doctype html>
 
         async function fetchDetections() {
             try {
-                const r = await fetch('/detections', {cache: 'no-store'});
+                const r = await guardedFetch('/detections', {cache: 'no-store'});
                 const j = await r.json();
                 latestDet = j;
                 lastDetFetchMs = Date.now();
@@ -872,7 +892,7 @@ INDEX_HTML = """<!doctype html>
                 detStateEl.textContent = `n=${n}`;
             } catch (e) {
                 // Keep last detections; just show stale
-                detStateEl.textContent = 'error';
+                if (e.name !== 'AbortError') detStateEl.textContent = 'error';
             }
         }
 
@@ -1115,10 +1135,8 @@ INDEX_HTML = """<!doctype html>
         });
 
         updateLabels();
-        fetchStatus();
-        setInterval(fetchStatus, 1000);
-        fetchDetections();
-        setInterval(fetchDetections, 333);
+        polled(fetchStatus, 1000);
+        polled(fetchDetections, 333);
         drawOverlay();
 
         // ──────────────────────────────────────────────────────────────
@@ -1165,7 +1183,7 @@ INDEX_HTML = """<!doctype html>
 
         async function fetchImu() {
             try {
-                const r = await fetch('/api/imu', {cache: 'no-store'});
+                const r = await guardedFetch('/api/imu', {cache: 'no-store'});
                 if (!r.ok) return;
                 imuData = await r.json();
 
@@ -1548,9 +1566,7 @@ INDEX_HTML = """<!doctype html>
             } catch (e) { /* ignore */ }
         });
 
-        // Poll IMU at ~10 Hz
-        fetchImu();
-        setInterval(fetchImu, 333);
+        polled(fetchImu, 333);
 
         // Front camera status
         const frontCamStatus = document.getElementById('frontCamStatus');
@@ -1771,91 +1787,80 @@ INDEX_HTML = """<!doctype html>
             }
         });
 
-        // Poll collision status from /status endpoint (slow – data also in fetchStatus)
-        setInterval(async () => {
-            try {
-                const r = await fetch('/status');
-                const d = await r.json();
-                if (d.collision_failsafe) {
-                    const cf = d.collision_failsafe;
-                    const dist_m = cf.distance_m;
-                    if (dist_m !== null && dist_m !== undefined && isFinite(dist_m)) {
-                        collisionDist.textContent = dist_m.toFixed(2) + ' m';
-                    } else {
-                        collisionDist.textContent = '—';
-                    }
-                    if (cf.active) {
-                        collisionStatus.textContent = 'BLOCKING';
-                        collisionStatus.style.color = '#b00';
-                        collisionDist.style.color = '#b00';
-                    } else if (cf.enabled) {
-                        collisionStatus.textContent = 'clear';
-                        collisionStatus.style.color = '#080';
-                        collisionDist.style.color = '';
-                    } else {
-                        collisionStatus.textContent = 'disabled';
-                        collisionStatus.style.color = '#666';
-                        collisionDist.style.color = '#666';
-                    }
-                    // Sync toggle button state
-                    if (cf.enabled !== collisionEnabled) {
-                        collisionEnabled = cf.enabled;
-                        if (collisionEnabled) {
-                            collisionToggleBtn.textContent = 'Disable Failsafe';
-                            collisionToggleBtn.classList.remove('primary');
-                            collisionToggleBtn.classList.add('danger');
-                        } else {
-                            collisionToggleBtn.textContent = 'Enable Failsafe';
-                            collisionToggleBtn.classList.remove('danger');
-                            collisionToggleBtn.classList.add('primary');
-                        }
-                    }
-                    // Update front-camera ultrasonic overlay
-                    updateUltrasonicOverlay(cf);
+        // Collision/cliff status updates are piggybacked on fetchStatus()
+        _onStatusCollisionCliff = function(d) {
+            if (d.collision_failsafe) {
+                const cf = d.collision_failsafe;
+                const dist_m = cf.distance_m;
+                if (dist_m !== null && dist_m !== undefined && isFinite(dist_m)) {
+                    collisionDist.textContent = dist_m.toFixed(2) + ' m';
+                } else {
+                    collisionDist.textContent = '\u2014';
                 }
-
-                // ── Cliff failsafe status ──────────────────────────
-                if (d.cliff_failsafe) {
-                    const cl = d.cliff_failsafe;
-                    const state = cl.sensor_state || 0;
-                    // Render sensor boxes: filled = floor present, empty = no floor/edge
-                    const labels = ['L1','L2','R1','R2'];
-                    let sensorStr = '';
-                    for (let i = 0; i < 4; i++) {
-                        const hasFloor = (state >> i) & 1;
-                        sensorStr += (hasFloor ? '\u25A0' : '\u25A1') + labels[i] + ' ';
-                    }
-                    cliffSensors.textContent = sensorStr.trim();
-
-                    if (cl.active) {
-                        cliffStatus.textContent = 'BLOCKING';
-                        cliffStatus.style.color = '#b00';
-                        cliffSensors.style.color = '#b00';
-                    } else if (cl.enabled) {
-                        cliffStatus.textContent = 'clear';
-                        cliffStatus.style.color = '#080';
-                        cliffSensors.style.color = '';
+                if (cf.active) {
+                    collisionStatus.textContent = 'BLOCKING';
+                    collisionStatus.style.color = '#b00';
+                    collisionDist.style.color = '#b00';
+                } else if (cf.enabled) {
+                    collisionStatus.textContent = 'clear';
+                    collisionStatus.style.color = '#080';
+                    collisionDist.style.color = '';
+                } else {
+                    collisionStatus.textContent = 'disabled';
+                    collisionStatus.style.color = '#666';
+                    collisionDist.style.color = '#666';
+                }
+                if (cf.enabled !== collisionEnabled) {
+                    collisionEnabled = cf.enabled;
+                    if (collisionEnabled) {
+                        collisionToggleBtn.textContent = 'Disable Failsafe';
+                        collisionToggleBtn.classList.remove('primary');
+                        collisionToggleBtn.classList.add('danger');
                     } else {
-                        cliffStatus.textContent = 'disabled';
-                        cliffStatus.style.color = '#666';
-                        cliffSensors.style.color = '#666';
-                    }
-                    // Sync toggle button
-                    if (cl.enabled !== cliffEnabled) {
-                        cliffEnabled = cl.enabled;
-                        if (cliffEnabled) {
-                            cliffToggleBtn.textContent = 'Disable Failsafe';
-                            cliffToggleBtn.classList.remove('primary');
-                            cliffToggleBtn.classList.add('danger');
-                        } else {
-                            cliffToggleBtn.textContent = 'Enable Failsafe';
-                            cliffToggleBtn.classList.remove('danger');
-                            cliffToggleBtn.classList.add('primary');
-                        }
+                        collisionToggleBtn.textContent = 'Enable Failsafe';
+                        collisionToggleBtn.classList.remove('danger');
+                        collisionToggleBtn.classList.add('primary');
                     }
                 }
-            } catch(e) {}
-        }, 2000);
+                updateUltrasonicOverlay(cf);
+            }
+            if (d.cliff_failsafe) {
+                const cl = d.cliff_failsafe;
+                const state = cl.sensor_state || 0;
+                const labels = ['L1','L2','R1','R2'];
+                let sensorStr = '';
+                for (let i = 0; i < 4; i++) {
+                    const hasFloor = (state >> i) & 1;
+                    sensorStr += (hasFloor ? '\u25A0' : '\u25A1') + labels[i] + ' ';
+                }
+                cliffSensors.textContent = sensorStr.trim();
+                if (cl.active) {
+                    cliffStatus.textContent = 'BLOCKING';
+                    cliffStatus.style.color = '#b00';
+                    cliffSensors.style.color = '#b00';
+                } else if (cl.enabled) {
+                    cliffStatus.textContent = 'clear';
+                    cliffStatus.style.color = '#080';
+                    cliffSensors.style.color = '';
+                } else {
+                    cliffStatus.textContent = 'disabled';
+                    cliffStatus.style.color = '#666';
+                    cliffSensors.style.color = '#666';
+                }
+                if (cl.enabled !== cliffEnabled) {
+                    cliffEnabled = cl.enabled;
+                    if (cliffEnabled) {
+                        cliffToggleBtn.textContent = 'Disable Failsafe';
+                        cliffToggleBtn.classList.remove('primary');
+                        cliffToggleBtn.classList.add('danger');
+                    } else {
+                        cliffToggleBtn.textContent = 'Enable Failsafe';
+                        cliffToggleBtn.classList.remove('danger');
+                        cliffToggleBtn.classList.add('primary');
+                    }
+                }
+            }
+        };
 
         // ──────────────────────────────────────────────────────────────
         // Odometry & Navigation
@@ -2605,15 +2610,14 @@ INDEX_HTML = """<!doctype html>
 
         async function fetchOdom() {
             try {
-                const r = await fetch('/api/odom', {cache: 'no-store'});
+                const r = await guardedFetch('/api/odom', {cache: 'no-store'});
                 if (!r.ok) return;
                 const d = await r.json();
                 updateOdomUI(d);
             } catch(e) {}
         }
 
-        setInterval(fetchOdom, 500);
-        fetchOdom();
+        polled(fetchOdom, 500);
 
         const allOdomBtns = [odomSetOriginBtn, odomStartRecBtn, odomStopRecBtn,
             odomReturnBtn, odomCancelBtn, odomNavBtn, odomNavCancelBtn, odomClearWpBtn, odomUndoWpBtn];
@@ -2721,7 +2725,7 @@ INDEX_HTML = """<!doctype html>
         // ── SLAM map polling (1 Hz) ──────────────────────────────────
         async function fetchMap() {
             try {
-                const r = await fetch('/api/map', {cache: 'no-store'});
+                const r = await guardedFetch('/api/map', {cache: 'no-store'}, 5000);
                 if (!r.ok) return;
                 const d = await r.json();
                 if (d.available) {
@@ -2742,8 +2746,7 @@ INDEX_HTML = """<!doctype html>
                 slamStatusEl.style.color = '#b00';
             }
         }
-        setInterval(fetchMap, 1000);
-        fetchMap();
+        polled(fetchMap, 1000);
 
         slamResetBtn.addEventListener('click', async () => {
             slamResetBtn.disabled = true;
@@ -2953,16 +2956,14 @@ INDEX_HTML = """<!doctype html>
 
         async function fetchLidar() {
             try {
-                const r = await fetch('/api/lidar', {cache: 'no-store'});
+                const r = await guardedFetch('/api/lidar', {cache: 'no-store'});
                 if (!r.ok) return;
                 const d = await r.json();
                 updateLidarUI(d);
             } catch(e) {}
         }
 
-        // Poll lidar at 2 Hz
-        setInterval(fetchLidar, 500);
-        fetchLidar();
+        polled(fetchLidar, 500);
 
         // ── LiDAR obstacle zone polling (5 Hz alongside lidar scan) ─
         const ozFrontEl = document.getElementById('ozFront');
@@ -2978,7 +2979,7 @@ INDEX_HTML = """<!doctype html>
 
         async function fetchLidarZones() {
             try {
-                const r = await fetch('/api/lidar_zones', {cache: 'no-store'});
+                const r = await guardedFetch('/api/lidar_zones', {cache: 'no-store'});
                 if (!r.ok) return;
                 const d = await r.json();
                 ozFrontEl.innerHTML = formatZone(d.front || 99);
@@ -2987,8 +2988,7 @@ INDEX_HTML = """<!doctype html>
                 ozRearEl.innerHTML = formatZone(d.rear || 99);
             } catch(e) {}
         }
-        setInterval(fetchLidarZones, 500);
-        fetchLidarZones();
+        polled(fetchLidarZones, 500);
 
         // ──────────────────────────────────────────────────────────────
         // Depth Map (Hailo-8 fast_depth)
@@ -3053,7 +3053,7 @@ INDEX_HTML = """<!doctype html>
 
         async function loadFaces() {
             try {
-                const r = await fetch('/api/faces', {cache: 'no-store'});
+                const r = await guardedFetch('/api/faces', {cache: 'no-store'});
                 const j = await r.json();
                 const faces = j.faces || [];
                 faceCountEl.textContent = String(faces.length);
@@ -3127,8 +3127,7 @@ INDEX_HTML = """<!doctype html>
             loadFaces();
         });
         // Auto-load on page open, then poll every 10s
-        loadFaces();
-        setInterval(loadFaces, 10000);
+        polled(loadFaces, 10000);
 
     </script>
 </body>
@@ -3636,6 +3635,8 @@ class WebVideoNode(Node):
         self._map_origin_x = 0.0
         self._map_origin_y = 0.0
         self._map_last_monotonic = 0.0
+        self._map_dirty = False
+        self._map_b64_cache = ''
 
         self._map_sub = self.create_subscription(
             OccupancyGrid, map_topic, self._on_map, 10
@@ -4479,10 +4480,19 @@ class WebVideoNode(Node):
             'navigating': bool(self._odom_navigating),
             'nav_wp_idx': self._odom_nav_wp_idx,
             'nav_wp_total': self._odom_nav_wp_total,
-            'trail': list(self._odom_trail_xy),  # send full trail (up to 2000 points)
+            'trail': self._downsample_trail(200),  # downsampled for network efficiency
             'path': self._odom_path_xy,
             'last_age_s': age,
         }
+
+    def _downsample_trail(self, max_points: int = 200) -> list:
+        trail = self._odom_trail_xy
+        n = len(trail)
+        if n <= max_points:
+            return list(trail)
+        # Always keep first and last, evenly sample the rest
+        step = (n - 1) / (max_points - 1)
+        return [trail[int(i * step)] for i in range(max_points)]
 
     def _call_trigger_service(self, client, name: str) -> dict:
         if not client.service_is_ready():
@@ -4586,6 +4596,7 @@ class WebVideoNode(Node):
         self._map_origin_x = msg.info.origin.position.x
         self._map_origin_y = msg.info.origin.position.y
         self._map_last_monotonic = time.monotonic()
+        self._map_dirty = True
 
     def get_map_dict(self) -> dict:
         """Build map data dict for /api/map endpoint."""
@@ -4593,13 +4604,16 @@ class WebVideoNode(Node):
         if not self._map_data or self._map_last_monotonic == 0.0:
             return {'available': False}
 
-        age = round(max(0.0, now - self._map_last_monotonic), 3)
+        # Only re-encode when map data changes
+        if self._map_dirty:
+            import base64
+            data_bytes = bytes(
+                255 if v < 0 else min(v, 100) for v in self._map_data
+            )
+            self._map_b64_cache = base64.b64encode(data_bytes).decode('ascii')
+            self._map_dirty = False
 
-        # Encode as base64: -1 → 255, 0–100 → 0–100
-        import base64
-        data_bytes = bytes(
-            255 if v < 0 else min(v, 100) for v in self._map_data
-        )
+        age = round(max(0.0, now - self._map_last_monotonic), 3)
         return {
             'available': True,
             'width': self._map_width,
@@ -4607,7 +4621,7 @@ class WebVideoNode(Node):
             'resolution': round(self._map_resolution, 4),
             'origin_x': round(self._map_origin_x, 4),
             'origin_y': round(self._map_origin_y, 4),
-            'data': base64.b64encode(data_bytes).decode('ascii'),
+            'data': self._map_b64_cache,
             'age_s': age,
         }
 
@@ -5132,6 +5146,10 @@ def make_handler(
 
                 last_stamp = 0.0
                 last_sent_time = 0.0
+                try:
+                    self.connection.settimeout(10.0)
+                except Exception:
+                    pass
 
                 try:
                     while True:
@@ -5160,7 +5178,7 @@ def make_handler(
                             self.wfile.flush()
                         except Exception:
                             pass
-                except (BrokenPipeError, ConnectionResetError):
+                except (BrokenPipeError, ConnectionResetError, TimeoutError):
                     return
                 except Exception as e:
                     if logger is not None:
@@ -5188,6 +5206,10 @@ def make_handler(
 
                 last_stamp = 0.0
                 last_sent_time = 0.0
+                try:
+                    self.connection.settimeout(10.0)
+                except Exception:
+                    pass
 
                 try:
                     while True:
@@ -5215,7 +5237,7 @@ def make_handler(
                             self.wfile.flush()
                         except Exception:
                             pass
-                except (BrokenPipeError, ConnectionResetError):
+                except (BrokenPipeError, ConnectionResetError, TimeoutError):
                     return
                 except Exception as e:
                     if logger is not None:
@@ -5243,6 +5265,10 @@ def make_handler(
 
                 last_stamp = 0.0
                 last_sent_time = 0.0
+                try:
+                    self.connection.settimeout(10.0)
+                except Exception:
+                    pass
 
                 try:
                     while True:
@@ -5270,7 +5296,7 @@ def make_handler(
                             self.wfile.flush()
                         except Exception:
                             pass
-                except (BrokenPipeError, ConnectionResetError):
+                except (BrokenPipeError, ConnectionResetError, TimeoutError):
                     return
                 except Exception as e:
                     if logger is not None:
@@ -5321,6 +5347,10 @@ def make_handler(
 
                 last_stamp = 0.0
                 last_sent_time = 0.0
+                try:
+                    self.connection.settimeout(10.0)
+                except Exception:
+                    pass
 
                 try:
                     while True:
@@ -5353,7 +5383,7 @@ def make_handler(
                             self.wfile.flush()
                         except Exception:
                             pass
-                except (BrokenPipeError, ConnectionResetError):
+                except (BrokenPipeError, ConnectionResetError, TimeoutError):
                     return
                 except Exception as e:
                     if logger is not None:
@@ -5382,6 +5412,10 @@ def make_handler(
 
                 last_seq = -1
                 try:
+                    self.connection.settimeout(10.0)
+                except Exception:
+                    pass
+                try:
                     while True:
                         seq, data = audio_buffer.get_newer(last_seq, timeout=2.0)
                         if not data:
@@ -5389,7 +5423,7 @@ def make_handler(
                         last_seq = seq
                         self.wfile.write(data)
                         self.wfile.flush()
-                except (BrokenPipeError, ConnectionResetError):
+                except (BrokenPipeError, ConnectionResetError, TimeoutError):
                     return
                 except Exception as e:
                     if logger is not None:
