@@ -29,6 +29,7 @@ def generate_launch_description():
     enable_slam = LaunchConfiguration('enable_slam')
     enable_lidar_obstacle = LaunchConfiguration('enable_lidar_obstacle')
     enable_calibration = LaunchConfiguration('enable_calibration')
+    camera_launch_prefix = LaunchConfiguration('camera_launch_prefix')
     params_file = LaunchConfiguration('params_file')
 
     default_params_file = PathJoinSubstitution([
@@ -53,6 +54,7 @@ def generate_launch_description():
         DeclareLaunchArgument('enable_slam', default_value='true'),
         DeclareLaunchArgument('enable_lidar_obstacle', default_value='true'),
         DeclareLaunchArgument('enable_calibration', default_value='true'),
+        DeclareLaunchArgument('camera_launch_prefix', default_value='nice -n 5'),
         DeclareLaunchArgument('params_file', default_value=default_params_file),
 
         Node(
@@ -84,6 +86,7 @@ def generate_launch_description():
             executable='opencv_camera',
             name='opencv_camera',
             output='screen',
+            prefix=camera_launch_prefix,
             parameters=[params_file],
             condition=IfCondition(enable_camera),
         ),
@@ -137,6 +140,7 @@ def generate_launch_description():
             executable='pi_camera',
             name='pi_camera',
             output='screen',
+            prefix=camera_launch_prefix,
             parameters=[params_file],
             condition=IfCondition(enable_front_camera),
         ),

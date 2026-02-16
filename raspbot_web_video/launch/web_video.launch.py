@@ -28,12 +28,14 @@ def generate_launch_description():
     tracking_enable_topic = LaunchConfiguration('tracking_enable_topic')
     tracking_config_topic = LaunchConfiguration('tracking_config_topic')
     follow_enable_topic = LaunchConfiguration('follow_enable_topic')
+    launch_prefix = LaunchConfiguration('launch_prefix')
 
     return LaunchDescription([
         DeclareLaunchArgument('topic', default_value='image_raw/compressed'),
         DeclareLaunchArgument('bind', default_value='0.0.0.0'),
         DeclareLaunchArgument('port', default_value='8080'),
-        DeclareLaunchArgument('fps_limit', default_value='15.0'),
+        DeclareLaunchArgument('fps_limit', default_value='12.0'),
+        DeclareLaunchArgument('launch_prefix', default_value='nice -n 5'),
         DeclareLaunchArgument('gimbal_topic', default_value='camera_gimbal/command_deg'),
         DeclareLaunchArgument('pan_min_deg', default_value='0.0'),
         DeclareLaunchArgument('pan_max_deg', default_value='180.0'),
@@ -58,6 +60,7 @@ def generate_launch_description():
             executable='web_video',
             name='web_video',
             output='screen',
+            prefix=launch_prefix,
             parameters=[{
                 'topic': topic,
                 'front_camera_topic': front_camera_topic,

@@ -3,3 +3,4 @@ __pycache__/
 build/
 install/
 log/**
+raspbot_web_video/raspbot_web_video/log/

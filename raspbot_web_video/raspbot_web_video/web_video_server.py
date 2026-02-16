@@ -194,6 +194,8 @@ class WebVideoNode(Node):
         self.declare_parameter("bind", "0.0.0.0")
         self.declare_parameter("port", 8080)
         self.declare_parameter("fps_limit", 15.0)
+        self.declare_parameter("depth_fps_limit", 8.0)
+        self.declare_parameter("http_backlog", 64)
 
         self.declare_parameter("gimbal_topic", "camera_gimbal/command_deg")
         self.declare_parameter("pan_min_deg", 0.0)
@@ -1812,6 +1814,7 @@ def make_handler(
     front_frame_buffer: FrameBuffer = None,
     depth_frame_buffer: FrameBuffer = None,
     fps_limit: float,
+    depth_fps_limit: float,
     logger,
     status_provider=None,
     detections_provider=None,
@@ -1867,6 +1870,8 @@ def make_handler(
     boundary = b"--frame"
     fps = max(float(fps_limit), 1.0)
     min_period = 1.0 / fps
+    depth_fps = max(float(depth_fps_limit), 1.0)
+    depth_min_period = 1.0 / depth_fps
 
     # ── Low-resolution JPEG resize helper (for Cardputer / embedded clients) ─
     _cv2 = None
@@ -2355,7 +2360,7 @@ def make_handler(
                 last_stamp = 0.0
                 last_sent_time = 0.0
                 try:
-                    self.connection.settimeout(10.0)
+                    self.connection.settimeout(3.0)
                 except Exception:
                     pass
 
@@ -2363,7 +2368,7 @@ def make_handler(
                     while True:
                         # Throttle server-side to avoid pegging CPU/network.
                         now = time.monotonic()
-                        sleep_needed = (last_sent_time + min_period) - now
+                        sleep_needed = (last_sent_time + depth_min_period) - now
                         if sleep_needed > 0:
                             time.sleep(sleep_needed)
 
@@ -2415,7 +2420,7 @@ def make_handler(
                 last_stamp = 0.0
                 last_sent_time = 0.0
                 try:
-                    self.connection.settimeout(10.0)
+                    self.connection.settimeout(3.0)
                 except Exception:
                     pass
 
@@ -2474,7 +2479,7 @@ def make_handler(
                 last_stamp = 0.0
                 last_sent_time = 0.0
                 try:
-                    self.connection.settimeout(10.0)
+                    self.connection.settimeout(3.0)
                 except Exception:
                     pass
 
@@ -2556,7 +2561,7 @@ def make_handler(
                 last_stamp = 0.0
                 last_sent_time = 0.0
                 try:
-                    self.connection.settimeout(10.0)
+                    self.connection.settimeout(3.0)
                 except Exception:
                     pass
 
@@ -2620,7 +2625,7 @@ def make_handler(
 
                 last_seq = -1
                 try:
-                    self.connection.settimeout(10.0)
+                    self.connection.settimeout(3.0)
                 except Exception:
                     pass
                 try:
@@ -3407,6 +3412,8 @@ def main() -> None:
     bind = str(node.get_parameter("bind").value)
     port = int(node.get_parameter("port").value)
     fps_limit = float(node.get_parameter("fps_limit").value)
+    depth_fps_limit = float(node.get_parameter("depth_fps_limit").value)
+    http_backlog = int(node.get_parameter("http_backlog").value)
 
     executor = MultiThreadedExecutor()
     executor.add_node(node)
@@ -3419,6 +3426,7 @@ def main() -> None:
         front_frame_buffer=front_frame_buffer,
         depth_frame_buffer=depth_frame_buffer,
         fps_limit=fps_limit,
+        depth_fps_limit=depth_fps_limit,
         logger=node.get_logger(),
         status_provider=node.status_dict,
         detections_provider=node.get_latest_detections,
@@ -3471,7 +3479,11 @@ def main() -> None:
         face_clear=node.face_clear,
         face_thumbnail=node.face_thumbnail,
     )
-    httpd = ThreadingHTTPServer((bind, port), handler_cls)
+    class RaspbotHTTPServer(ThreadingHTTPServer):
+        daemon_threads = True
+
+    RaspbotHTTPServer.request_queue_size = max(16, min(256, int(http_backlog)))
+    httpd = RaspbotHTTPServer((bind, port), handler_cls)
     # Allow the serve loop to wake up periodically so Ctrl-C / rclpy shutdown is responsive.
     httpd.timeout = 0.5
 

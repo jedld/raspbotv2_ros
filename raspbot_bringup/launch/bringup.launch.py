@@ -29,6 +29,7 @@ def generate_launch_description():
     hailo_tilt_sign = LaunchConfiguration('hailo_tilt_sign')
     tracking_config_topic = LaunchConfiguration('tracking_config_topic')
     follow_enable_topic = LaunchConfiguration('follow_enable_topic')
+    vision_launch_prefix = LaunchConfiguration('vision_launch_prefix')
     enable_bt_cardputer_teleop = LaunchConfiguration('enable_bt_cardputer_teleop')
     bt_cardputer_name = LaunchConfiguration('bt_cardputer_name')
     bt_cardputer_address = LaunchConfiguration('bt_cardputer_address')
@@ -84,6 +85,7 @@ def generate_launch_description():
         DeclareLaunchArgument('hailo_tilt_sign', default_value='-1'),
         DeclareLaunchArgument('tracking_config_topic', default_value='tracking/config'),
         DeclareLaunchArgument('follow_enable_topic', default_value='follow/enable'),
+        DeclareLaunchArgument('vision_launch_prefix', default_value='nice -n 5'),
         DeclareLaunchArgument('enable_bt_cardputer_teleop', default_value='true'),
         DeclareLaunchArgument('bt_cardputer_name', default_value='RaspbotCardputer'),
         DeclareLaunchArgument('bt_cardputer_address', default_value=''),
@@ -142,6 +144,7 @@ def generate_launch_description():
                 'tracking_enable_topic': 'tracking/enable',
                 'tracking_config_topic': tracking_config_topic,
                 'follow_enable_topic': follow_enable_topic,
+                'launch_prefix': vision_launch_prefix,
             }.items(),
             condition=IfCondition(enable_web_video),
         ),
@@ -160,6 +163,7 @@ def generate_launch_description():
                 'pan_sign': hailo_pan_sign,
                 'tilt_sign': hailo_tilt_sign,
                 'depth_hef_path': depth_hef_path,
+                'launch_prefix': vision_launch_prefix,
             }.items(),
             condition=IfCondition(enable_hailo),
         ),
@@ -169,6 +173,7 @@ def generate_launch_description():
             executable='face_recognition',
             name='face_recognition',
             output='screen',
+            prefix=vision_launch_prefix,
             parameters=[{
                 'input_topic': 'image_raw/compressed',
                 'detections_topic': 'detections/json',

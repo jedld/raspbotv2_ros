@@ -30,6 +30,13 @@ const pan = document.getElementById('pan');
 
         let debounceTimer = null;
         let selectedPersonId = -1;
+        let trackingEnabled = false;
+        let manualTrackingDisableInFlight = false;
+        let gimbalInFlight = false;
+        let gimbalPending = null;
+        let frontFrameCount = -1;
+        let frontFrameLastAdvanceMs = 0;
+        let frontReconnectLastMs = 0;
 
         /* Track when a user last touched each slider so the status poll
            does not overwrite the value while the user is still dragging. */
@@ -74,14 +81,19 @@ const pan = document.getElementById('pan');
                     tilt.max = j.gimbal.limits.tilt_max_deg;
                 }
                 if (j.gimbal.state) {
-                    pan.value = Math.round(j.gimbal.state.pan_deg);
-                    tilt.value = Math.round(j.gimbal.state.tilt_deg);
+                    if (!userRecentlyTouched(pan)) {
+                        pan.value = Math.round(j.gimbal.state.pan_deg);
+                    }
+                    if (!userRecentlyTouched(tilt)) {
+                        tilt.value = Math.round(j.gimbal.state.tilt_deg);
+                    }
                     updateLabels();
                 }
             }
             statusEl.textContent = `frames=${j.frame_count ?? '?'} last_frame_age_s=${j.last_frame_age_s ?? 'null'}`;
             if (j.tracking) {
                 const enabled = Boolean(j.tracking.enabled);
+                trackingEnabled = enabled;
                 setTrackingUi(enabled);
                 if (typeof j.tracking.pan_sign === 'number') {
                     invPanChk.checked = (Number(j.tracking.pan_sign) < 0);
@@ -92,6 +104,14 @@ const pan = document.getElementById('pan');
                 if (typeof j.tracking.selected_person_id === 'number') {
                     selectedPersonId = j.tracking.selected_person_id;
                     updateSelectionUi();
+                }
+            }
+            if (j.front_camera && typeof j.front_camera.frame_count === 'number') {
+                const fc = Number(j.front_camera.frame_count);
+                if (fc > frontFrameCount) {
+                    frontFrameCount = fc;
+                    frontFrameLastAdvanceMs = Date.now();
+                    frontCamOk = true;
                 }
             }
             if (j.follow) {
@@ -476,16 +496,35 @@ const pan = document.getElementById('pan');
             requestAnimationFrame(drawOverlay);
         }
 
-        async function sendGimbal(p, t) {
-            try {
-                await fetch('/api/gimbal', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({pan_deg: Number(p), tilt_deg: Number(t)})
+        function flushGimbalSendQueue() {
+            if (gimbalInFlight || !gimbalPending) return;
+            const cmd = gimbalPending;
+            gimbalPending = null;
+            gimbalInFlight = true;
+
+            // Manual gimbal control should always disable auto face tracking.
+            if (trackingEnabled && !manualTrackingDisableInFlight) {
+                manualTrackingDisableInFlight = true;
+                trackingEnabled = false;
+                setTrackingUi(false);
+                setTracking(false).finally(() => {
+                    manualTrackingDisableInFlight = false;
                 });
-            } catch (e) {
-                // ignore
             }
+
+            guardedFetch('/api/gimbal', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({pan_deg: cmd.pan, tilt_deg: cmd.tilt})
+            }, 1200).catch(() => {}).finally(() => {
+                gimbalInFlight = false;
+                if (gimbalPending) flushGimbalSendQueue();
+            });
+        }
+
+        function sendGimbal(p, t) {
+            gimbalPending = {pan: Number(p), tilt: Number(t)};
+            flushGimbalSendQueue();
         }
 
         async function sendCmdVel(lin, lat, ang) {
@@ -521,11 +560,11 @@ const pan = document.getElementById('pan');
             if (debounceTimer) clearTimeout(debounceTimer);
             debounceTimer = setTimeout(() => {
                 sendGimbal(pan.value, tilt.value);
-            }, 120);
+            }, 80);
         }
 
-        pan.addEventListener('input', () => { updateLabels(); scheduleSend(); });
-        tilt.addEventListener('input', () => { updateLabels(); scheduleSend(); });
+        pan.addEventListener('input', () => { markUserInput(pan); updateLabels(); scheduleSend(); });
+        tilt.addEventListener('input', () => { markUserInput(tilt); updateLabels(); scheduleSend(); });
         sendBtn.addEventListener('click', () => sendGimbal(pan.value, tilt.value));
         centerBtn.addEventListener('click', () => fetch('/api/gimbal/center', {method:'POST'}));
         stopBtn.addEventListener('click', () => stopCmdVel());
@@ -551,6 +590,8 @@ const pan = document.getElementById('pan');
 
             pan.value = String(Math.round(p));
             tilt.value = String(Math.round(t));
+            markUserInput(pan);
+            markUserInput(tilt);
             updateLabels();
             scheduleSend();
         }, { passive: false });
@@ -1101,9 +1142,28 @@ const pan = document.getElementById('pan');
         const ultrasonicOverlay = document.getElementById('ultrasonicOverlay');
         const ultrasonicWarnIcon = document.getElementById('ultrasonicWarnIcon');
         let frontCamOk = false;
-        frontVideo.addEventListener('load', () => { frontCamOk = true; frontCamStatus.textContent = 'streaming'; });
+        frontVideo.addEventListener('load', () => {
+            frontCamOk = true;
+            frontFrameLastAdvanceMs = Date.now();
+            frontCamStatus.textContent = 'streaming';
+        });
         frontVideo.addEventListener('error', () => { frontCamOk = false; frontCamStatus.textContent = 'no stream'; });
         setInterval(() => {
+            const now = Date.now();
+            const stalled = frontFrameLastAdvanceMs > 0 && (now - frontFrameLastAdvanceMs) > 3000;
+            if (stalled) {
+                frontCamOk = false;
+                // Force MJPEG reconnect at most once every 2s.
+                if ((now - frontReconnectLastMs) > 2000) {
+                    frontReconnectLastMs = now;
+                    const oldSrc = frontVideo.src || '/stream_front.mjpg';
+                    const base = oldSrc.split('?')[0];
+                    frontVideo.src = '';
+                    setTimeout(() => {
+                        frontVideo.src = `${base}?t=${Date.now()}`;
+                    }, 50);
+                }
+            }
             if (frontCamOk) {
                 frontCamStatus.textContent = 'streaming';
                 frontCamStatus.style.color = '#080';
@@ -2495,9 +2555,14 @@ const pan = document.getElementById('pan');
         let depthEnabled = true;
         let depthStreamOk = false;
 
-        depthVideo.addEventListener('load', () => { depthStreamOk = true; });
-        depthVideo.addEventListener('error', () => { depthStreamOk = false; });
+        // Some browsers don't reliably emit load/error for MJPEG updates.
+        // Detect stream presence by checking the image element's rendered size.
+        depthVideo.addEventListener('load', () => { /* keep for compatibility */ });
+        depthVideo.addEventListener('error', () => { /* keep for compatibility */ });
         setInterval(() => {
+            // consider the stream OK if the image has loaded at least one frame
+            depthStreamOk = (depthVideo.complete && depthVideo.naturalWidth && depthVideo.naturalWidth > 0);
+
             if (depthStreamOk && depthEnabled) {
                 depthStatus.textContent = 'streaming';
                 depthStatus.style.color = '#080';

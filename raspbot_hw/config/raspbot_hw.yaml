@@ -189,7 +189,7 @@ pi_camera:
     frame_id: "front_camera_link"
     width: 640
     height: 480
-    fps: 30.0
+    fps: 20.0
     jpeg_quality: 80
     topic: "front_camera/compressed"
     # Autofocus (Pi Camera Module 3 / IMX708 PDAF)

@@ -78,6 +78,7 @@ def generate_launch_description():
     depth_colorized_topic = LaunchConfiguration('depth_colorized_topic')
     depth_enable_topic = LaunchConfiguration('depth_enable_topic')
     depth_inference_fps = LaunchConfiguration('depth_inference_fps')
+    launch_prefix = LaunchConfiguration('launch_prefix')
 
     return LaunchDescription([
         DeclareLaunchArgument('hef_path', default_value=''),
@@ -91,7 +92,8 @@ def generate_launch_description():
 
         DeclareLaunchArgument('score_threshold', default_value='0.45'),
         DeclareLaunchArgument('iou_threshold', default_value='0.45'),
-        DeclareLaunchArgument('inference_fps', default_value='10.0'),
+        DeclareLaunchArgument('inference_fps', default_value='8.0'),
+        DeclareLaunchArgument('launch_prefix', default_value='nice -n 5'),
 
         DeclareLaunchArgument('tracking_enabled', default_value='false'),
         DeclareLaunchArgument('kp_pan_deg', default_value='28.0'),
@@ -152,13 +154,14 @@ def generate_launch_description():
         DeclareLaunchArgument('depth_image_topic', default_value='depth/image'),
         DeclareLaunchArgument('depth_colorized_topic', default_value='depth/colorized/compressed'),
         DeclareLaunchArgument('depth_enable_topic', default_value='depth/enable'),
-        DeclareLaunchArgument('depth_inference_fps', default_value='5.0'),
+        DeclareLaunchArgument('depth_inference_fps', default_value='4.0'),
 
         Node(
             package='raspbot_hailo_tracking',
             executable='hailo_detector',
             name='hailo_detector',
             output='screen',
+            prefix=launch_prefix,
             additional_env={'HAILO_MONITOR': '1'},
             parameters=[{
                 'hef_path': hef_path,
