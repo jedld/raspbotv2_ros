@@ -21,6 +21,7 @@ setup(
     entry_points={
         'console_scripts': [
             'web_video = raspbot_web_video.web_video_server:main',
+            'face_recognition = raspbot_web_video.face_recognition_node:main',
         ],
     },
 )

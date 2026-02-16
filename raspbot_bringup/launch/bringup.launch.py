@@ -165,6 +165,19 @@ def generate_launch_description():
         ),
 
         Node(
+            package='raspbot_web_video',
+            executable='face_recognition',
+            name='face_recognition',
+            output='screen',
+            parameters=[{
+                'input_topic': 'image_raw/compressed',
+                'detections_topic': 'detections/json',
+                'output_topic': 'face_recognition/detections',
+            }],
+            condition=IfCondition(enable_hailo),
+        ),
+
+        Node(
             package='raspbot_teleop',
             executable='bt_cardputer_teleop',
             name='bt_cardputer_teleop',

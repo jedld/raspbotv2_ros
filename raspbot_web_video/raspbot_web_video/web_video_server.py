@@ -468,6 +468,30 @@ INDEX_HTML = """<!doctype html>
                 <div class=\"kv\">Buffer: <span id=\"micBufInfo\">-</span></div>
             </div>
         </div>
+
+        <div class=\"card\" id=\"faceCard\">
+            <h2>&#128100; Face Recognition</h2>
+            <p class=\"muted\">Manage enrolled faces. Faces are auto-detected and stored with 128-d SFace embeddings in a local SQLite DB.</p>
+            <div class=\"row\" style=\"margin-bottom:8px;\">
+                <button class=\"primary\" id=\"faceRefreshBtn\">Refresh</button>
+                <button class=\"danger\" id=\"faceClearBtn\">Clear All</button>
+                <div class=\"kv\">Enrolled: <span id=\"faceCount\">0</span></div>
+            </div>
+            <div id=\"faceList\" style=\"display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px;\"></div>
+            <div id=\"faceMergePanel\" style=\"margin-top:10px;border-top:1px solid #eee;padding-top:10px;display:none;\">
+                <h3 style=\"margin:0 0 6px;font-size:14px;\">Merge Faces</h3>
+                <div class=\"row\">
+                    <div>
+                        <label>Keep ID: <input id=\"faceKeepId\" type=\"number\" min=\"1\" style=\"width:60px;padding:4px;border:1px solid #ccc;border-radius:4px;\" /></label>
+                    </div>
+                    <div>
+                        <label>Merge ID: <input id=\"faceMergeId\" type=\"number\" min=\"1\" style=\"width:60px;padding:4px;border:1px solid #ccc;border-radius:4px;\" /></label>
+                    </div>
+                    <button class=\"primary\" id=\"faceMergeBtn\">Merge</button>
+                </div>
+            </div>
+        </div>
+
     </div>
   </div>
 
@@ -894,7 +918,8 @@ INDEX_HTML = """<!doctype html>
                 const label = String(d.label ?? d.class_id ?? '?');
                 const score = Number(d.score);
                 const idTag = tid >= 0 ? `#${tid} ` : '';
-                const text = Number.isFinite(score) ? `${idTag}${label} ${(score*100).toFixed(0)}%` : `${idTag}${label}`;
+                const faceName = d.face_name ? `[${d.face_name}] ` : '';
+                const text = Number.isFinite(score) ? `${faceName}${idTag}${label} ${(score*100).toFixed(0)}%` : `${faceName}${idTag}${label}`;
                 const tw = ctx.measureText(text).width + 6;
                 const th = 14;
                 ctx.fillRect(x, Math.max(0, y - th), tw, th);
@@ -3015,6 +3040,96 @@ INDEX_HTML = """<!doctype html>
         depthShowChk.addEventListener('change', () => {
             depthStreamWrap.style.display = depthShowChk.checked ? '' : 'none';
         });
+
+        // ── Face Recognition UI ─────────────────────────────────
+        const faceListEl = document.getElementById('faceList');
+        const faceCountEl = document.getElementById('faceCount');
+        const faceRefreshBtn = document.getElementById('faceRefreshBtn');
+        const faceClearBtn = document.getElementById('faceClearBtn');
+        const faceMergePanel = document.getElementById('faceMergePanel');
+        const faceMergeBtn = document.getElementById('faceMergeBtn');
+        const faceKeepId = document.getElementById('faceKeepId');
+        const faceMergeId = document.getElementById('faceMergeId');
+
+        async function loadFaces() {
+            try {
+                const r = await fetch('/api/faces', {cache: 'no-store'});
+                const j = await r.json();
+                const faces = j.faces || [];
+                faceCountEl.textContent = String(faces.length);
+                faceListEl.innerHTML = '';
+                faceMergePanel.style.display = faces.length >= 2 ? '' : 'none';
+                for (const f of faces) {
+                    const card = document.createElement('div');
+                    card.style.cssText = 'border:1px solid #dde0e4;border-radius:8px;padding:8px;background:#fafafa;';
+                    const thumbUrl = '/api/faces/thumbnail?id=' + f.face_id;
+                    card.innerHTML = `
+                        <img src="${thumbUrl}" alt="face" style="width:100%;height:80px;object-fit:cover;border-radius:4px;background:#eee;" onerror="this.style.background='#ddd';this.alt='No photo';" />
+                        <div style="margin-top:4px;font-size:12px;">
+                            <strong>ID ${f.face_id}</strong> &middot; ${f.num_embeddings} emb
+                        </div>
+                        <input type="text" value="${(f.name||'').replace(/"/g,'&quot;')}" data-fid="${f.face_id}"
+                            style="width:100%;margin-top:4px;padding:3px 6px;border:1px solid #ccc;border-radius:4px;font-size:12px;"
+                            placeholder="Name" />
+                        <div style="display:flex;gap:4px;margin-top:4px;">
+                            <button class="faceRenameBtn primary" data-fid="${f.face_id}" style="flex:1;font-size:11px;padding:3px 6px;">Save</button>
+                            <button class="faceDeleteBtn danger" data-fid="${f.face_id}" style="flex:1;font-size:11px;padding:3px 6px;">Delete</button>
+                        </div>`;
+                    faceListEl.appendChild(card);
+                }
+                // Bind rename buttons
+                for (const btn of faceListEl.querySelectorAll('.faceRenameBtn')) {
+                    btn.addEventListener('click', async () => {
+                        const fid = Number(btn.dataset.fid);
+                        const inp = faceListEl.querySelector(`input[data-fid="${fid}"]`);
+                        if (!inp) return;
+                        await fetch('/api/faces/rename', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({face_id: fid, name: inp.value})
+                        });
+                        loadFaces();
+                    });
+                }
+                // Bind delete buttons
+                for (const btn of faceListEl.querySelectorAll('.faceDeleteBtn')) {
+                    btn.addEventListener('click', async () => {
+                        const fid = Number(btn.dataset.fid);
+                        if (!confirm(`Delete face ID ${fid}?`)) return;
+                        await fetch('/api/faces/delete', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({face_id: fid})
+                        });
+                        loadFaces();
+                    });
+                }
+            } catch (e) {
+                faceCountEl.textContent = 'error';
+            }
+        }
+
+        faceRefreshBtn.addEventListener('click', loadFaces);
+        faceClearBtn.addEventListener('click', async () => {
+            if (!confirm('Delete ALL enrolled faces?')) return;
+            await fetch('/api/faces/clear', {method: 'POST'});
+            loadFaces();
+        });
+        faceMergeBtn.addEventListener('click', async () => {
+            const kid = Number(faceKeepId.value);
+            const mid = Number(faceMergeId.value);
+            if (!kid || !mid || kid === mid) { alert('Enter two different face IDs.'); return; }
+            await fetch('/api/faces/merge', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({keep_id: kid, merge_id: mid})
+            });
+            loadFaces();
+        });
+        // Auto-load on page open, then poll every 10s
+        loadFaces();
+        setInterval(loadFaces, 10000);
+
     </script>
 </body>
 </html>
@@ -3184,6 +3299,18 @@ class WebVideoNode(Node):
         self._last_detections_monotonic = 0.0
         self._detections_sub = self.create_subscription(String, detections_topic, self._on_detections, 10)
         self.get_logger().info(f"Detections topic: {detections_topic} (std_msgs/String JSON)")
+
+        # Face-recognition enriched detections (preferred over raw hailo detections)
+        face_det_topic = "face_recognition/detections"
+        self._face_detections_json = None
+        self._face_det_monotonic = 0.0
+        self._face_det_sub = self.create_subscription(String, face_det_topic, self._on_face_detections, 10)
+        self.get_logger().info(f"Face detections topic: {face_det_topic}")
+
+        # Face database for management API
+        from raspbot_web_video.face_db import FaceDB as _FaceDB
+        self._face_db = _FaceDB()
+        self.get_logger().info(f"Face DB loaded: {self._face_db.db_path} ({self._face_db.num_faces} faces)")
 
         tracking_enable_topic = str(self.get_parameter("tracking_enable_topic").value)
         self._tracking_enabled = False
@@ -3732,7 +3859,20 @@ class WebVideoNode(Node):
         self._latest_detections_json = msg.data
         self._last_detections_monotonic = time.monotonic()
 
+    def _on_face_detections(self, msg: String) -> None:
+        if not msg.data:
+            return
+        self._face_detections_json = msg.data
+        self._face_det_monotonic = time.monotonic()
+
     def get_latest_detections(self) -> dict:
+        # Prefer face-recognition enriched detections if recent (< 2s)
+        now = time.monotonic()
+        if self._face_detections_json and (now - self._face_det_monotonic) < 2.0:
+            try:
+                return json.loads(self._face_detections_json)
+            except Exception:
+                pass
         # Always return valid JSON.
         if not self._latest_detections_json:
             return {"image_width": None, "image_height": None, "detections": []}
@@ -3740,6 +3880,30 @@ class WebVideoNode(Node):
             return json.loads(self._latest_detections_json)
         except Exception:
             return {"error": "invalid_detections_json", "detections": []}
+
+    # ------------------------------------------------------------------
+    # Face DB management (delegated to FaceDB instance)
+    # ------------------------------------------------------------------
+    def face_list(self) -> list:
+        return self._face_db.get_all_faces()
+
+    def face_rename(self, face_id: int, name: str) -> bool:
+        ok = self._face_db.update_face_name(face_id, name)
+        if ok:
+            self._face_db._rebuild_centroids()
+        return ok
+
+    def face_delete(self, face_id: int) -> bool:
+        return self._face_db.delete_face(face_id)
+
+    def face_merge(self, keep_id: int, merge_id: int) -> bool:
+        return self._face_db.merge_faces(keep_id, merge_id)
+
+    def face_clear(self) -> int:
+        return self._face_db.clear_all()
+
+    def face_thumbnail(self, face_id: int):
+        return self._face_db.get_thumbnail(face_id)
 
     def set_tracking_enabled(self, enabled: bool) -> None:
         msg = Bool()
@@ -4698,6 +4862,12 @@ def make_handler(
     slam_reset=None,
     calibrate_front=None,
     calibrate_front_static=None,
+    face_list=None,
+    face_rename=None,
+    face_delete=None,
+    face_merge=None,
+    face_clear=None,
+    face_thumbnail=None,
 ):
     boundary = b"--frame"
     fps = max(float(fps_limit), 1.0)
@@ -5225,6 +5395,46 @@ def make_handler(
                     if logger is not None:
                         logger.warn(f"audio stream client error: {e!r}")
                     return
+
+            # ── Face DB API (GET) ────────────────────────────────
+            if path == '/api/faces':
+                faces = []
+                if callable(face_list):
+                    try:
+                        faces = face_list()
+                    except Exception:
+                        pass
+                body = json.dumps({"faces": faces}).encode("utf-8")
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            if path == '/api/faces/thumbnail':
+                qs = parse_qs(parsed.query)
+                try:
+                    fid = int(qs.get('id', ['0'])[0])
+                except Exception:
+                    fid = 0
+                thumb = None
+                if callable(face_thumbnail) and fid > 0:
+                    try:
+                        thumb = face_thumbnail(fid)
+                    except Exception:
+                        pass
+                if thumb:
+                    self.send_response(HTTPStatus.OK)
+                    self.send_header("Content-Type", "image/jpeg")
+                    self.send_header("Content-Length", str(len(thumb)))
+                    self.send_header("Cache-Control", "max-age=60")
+                    self.end_headers()
+                    self.wfile.write(thumb)
+                else:
+                    self.send_response(HTTPStatus.NOT_FOUND)
+                    self.end_headers()
+                return
 
             self.send_response(HTTPStatus.NOT_FOUND)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
@@ -5846,6 +6056,96 @@ def make_handler(
                     self.end_headers()
                 return
 
+            # ── Face DB API (POST) ───────────────────────────────
+            if path == '/api/faces/rename':
+                try:
+                    length = int(self.headers.get('Content-Length', '0'))
+                    raw = self.rfile.read(length) if length else b'{}'
+                    payload = json.loads(raw)
+                    fid = int(payload['face_id'])
+                    name = str(payload['name'])
+                except Exception:
+                    self.send_response(HTTPStatus.BAD_REQUEST)
+                    self.end_headers()
+                    return
+                ok = False
+                if callable(face_rename):
+                    try:
+                        ok = face_rename(fid, name)
+                    except Exception:
+                        pass
+                body = json.dumps({"ok": ok}).encode()
+                self.send_response(HTTPStatus.OK)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            if path == '/api/faces/delete':
+                try:
+                    length = int(self.headers.get('Content-Length', '0'))
+                    raw = self.rfile.read(length) if length else b'{}'
+                    payload = json.loads(raw)
+                    fid = int(payload['face_id'])
+                except Exception:
+                    self.send_response(HTTPStatus.BAD_REQUEST)
+                    self.end_headers()
+                    return
+                ok = False
+                if callable(face_delete):
+                    try:
+                        ok = face_delete(fid)
+                    except Exception:
+                        pass
+                body = json.dumps({"ok": ok}).encode()
+                self.send_response(HTTPStatus.OK)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            if path == '/api/faces/merge':
+                try:
+                    length = int(self.headers.get('Content-Length', '0'))
+                    raw = self.rfile.read(length) if length else b'{}'
+                    payload = json.loads(raw)
+                    keep_id = int(payload['keep_id'])
+                    merge_id = int(payload['merge_id'])
+                except Exception:
+                    self.send_response(HTTPStatus.BAD_REQUEST)
+                    self.end_headers()
+                    return
+                ok = False
+                if callable(face_merge):
+                    try:
+                        ok = face_merge(keep_id, merge_id)
+                    except Exception:
+                        pass
+                body = json.dumps({"ok": ok}).encode()
+                self.send_response(HTTPStatus.OK)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            if path == '/api/faces/clear':
+                n = 0
+                if callable(face_clear):
+                    try:
+                        n = face_clear()
+                    except Exception:
+                        pass
+                body = json.dumps({"ok": True, "deleted": n}).encode()
+                self.send_response(HTTPStatus.OK)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
             self.send_response(HTTPStatus.NOT_FOUND)
             self.send_header('Content-Type', 'text/plain; charset=utf-8')
             self.end_headers()
@@ -5922,6 +6222,12 @@ def main() -> None:
         slam_reset=node.slam_reset,
         calibrate_front=node.calibrate_front,
         calibrate_front_static=node.calibrate_front_static,
+        face_list=node.face_list,
+        face_rename=node.face_rename,
+        face_delete=node.face_delete,
+        face_merge=node.face_merge,
+        face_clear=node.face_clear,
+        face_thumbnail=node.face_thumbnail,
     )
     httpd = ThreadingHTTPServer((bind, port), handler_cls)
     # Allow the serve loop to wake up periodically so Ctrl-C / rclpy shutdown is responsive.
