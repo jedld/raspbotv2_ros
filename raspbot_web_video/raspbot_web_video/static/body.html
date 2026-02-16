@@ -1,0 +1,429 @@
+<div class=\"wrap\">
+    <div class=\"header\">
+      <h1>&#129302; Raspbot Dashboard</h1>
+      <p class=\"muted\">Real-time robot control &amp; sensor monitoring</p>
+    </div>
+    <div class=\"dashboard\">
+        <div class=\"card card-stream\">
+            <div class=\"videoWrap\" id=\"videoWrap\">
+                <img id=\"video\" src=\"/stream.mjpg\" alt=\"camera stream\" />
+                <canvas id=\"overlay\" class=\"overlay\"></canvas>
+            </div>
+        </div>
+
+        <div class=\"card\">
+            <h2>Gimbal</h2>
+            <p class=\"muted\">Pan/tilt control publishes to <code>camera_gimbal/command_deg</code> (x=pan, y=tilt).</p>
+
+            <div class=\"row\">
+                <div>
+                    <label for=\"pan\">Pan: <span id=\"panVal\"></span>°</label>
+                    <input id=\"pan\" type=\"range\" min=\"0\" max=\"180\" step=\"1\" />
+                </div>
+                <div>
+                    <label for=\"tilt\">Tilt: <span id=\"tiltVal\"></span>°</label>
+                    <input id=\"tilt\" type=\"range\" min=\"0\" max=\"110\" step=\"1\" />
+                </div>
+            </div>
+
+            <div class=\"row\" style=\"margin-top: 8px;\">
+                <button id=\"sendBtn\">Send</button>
+                <button id=\"centerBtn\">Center</button>
+                <div class=\"kv\">Status: <span id=\"status\">loading…</span></div>
+            </div>
+        </div>
+
+        <div class=\"card\">
+            <h2>Drive (WASD)</h2>
+            <p class=\"muted\">Keyboard teleop publishes to <code>cmd_vel</code>. Click this page once so it has focus.</p>
+            <div class=\"row\">
+                <button class=\"danger\" id=\"stopBtn\" title=\"Immediately publish zero cmd_vel\">STOP</button>
+                <div class=\"kv\">Keys: <code>W</code>=forward, <code>S</code>=reverse, <code>A</code>=turn left, <code>D</code>=turn right. Hold <code>Shift</code> for faster.</div>
+            </div>
+            <div class=\"row\" style=\"margin-top: 8px;\">
+                <div class=\"kv\">cmd_vel: <span id=\"cmdVel\">0, 0</span></div>
+                <div class=\"kv\">Safety: auto-stop on keyup / tab switch.</div>
+            </div>
+        </div>
+
+        <div class=\"card\" id=\"collisionCard\">
+            <h2>&#128721; Collision Failsafe</h2>
+            <p class=\"muted\">Ultrasonic-based forward-motion blocker. Protects all cmd_vel sources (WASD, auto-follow, teleop).</p>
+            <div class=\"row\">
+                <button class=\"danger\" id=\"collisionToggleBtn\">Disable Failsafe</button>
+                <div class=\"kv\">Status: <span id=\"collisionStatus\">unknown</span></div>
+                <div class=\"kv\">Distance: <span id=\"collisionDist\">—</span></div>
+            </div>
+            <div class=\"row\" style=\"margin-top: 4px;\">
+                <div class=\"kv\" style=\"font-size:12px;\">Stop &lt; 0.15 m &nbsp;|&nbsp; Slow 0.15–0.35 m &nbsp;|&nbsp; Clear &gt; 0.35 m</div>
+            </div>
+        </div>
+
+        <div class=\"card\" id=\"cliffCard\">
+            <h2>&#9888; Cliff / Edge Failsafe</h2>
+            <p class=\"muted\">Line-tracker IR sensors detect missing floor and block forward motion. Backward/strafe/rotation always allowed.</p>
+            <div class=\"row\">
+                <button class=\"danger\" id=\"cliffToggleBtn\">Disable Failsafe</button>
+                <div class=\"kv\">Status: <span id=\"cliffStatus\">unknown</span></div>
+                <div class=\"kv\">Sensors: <span id=\"cliffSensors\">&mdash;</span></div>
+            </div>
+            <div class=\"row\" style=\"margin-top: 4px;\">
+                <div class=\"kv\" style=\"font-size:12px;\">&#9632;=floor &nbsp; &#9633;=edge/no floor &nbsp;|&nbsp; Sensors: L1 L2 (left) R1 R2 (right)</div>
+            </div>
+        </div>
+
+        <div class=\"card\">
+            <h2>Detection / Tracking</h2>
+            <p class=\"muted\">Shows bounding boxes from <code>detections/json</code> and can enable person tracking via <code>tracking/enable</code>.</p>
+            <div class=\"row\">
+                <button class=\"primary\" id=\"trackBtn\">Enable person tracking</button>
+                <label class=\"kv\"><input id=\"boxesChk\" type=\"checkbox\" checked /> Show boxes</label>
+                <label class=\"kv\"><input id=\"invPanChk\" type=\"checkbox\" checked /> Invert pan</label>
+                <label class=\"kv\"><input id=\"invTiltChk\" type=\"checkbox\" checked /> Invert tilt</label>
+                <div class=\"kv\">Tracking: <span id=\"trackState\">off</span></div>
+            </div>
+            <div class=\"row\" style=\"margin-top: 8px;\">
+                <div class=\"kv\">Detections: <span id=\"detState\">n/a</span></div>
+                <div class=\"kv\">Selected: <span id=\"selectedState\">none</span></div>
+                <button id=\"clearSelBtn\" style=\"flex: 0 0 auto;\">Clear selection</button>
+            </div>
+            <p class=\"muted\" style=\"margin-top: 4px;\">Click on a detected person in the video to select them for exclusive tracking/following.</p>
+        </div>
+
+        <div class=\"card\">
+            <h2>Auto Follow</h2>
+            <p class=\"muted\">Makes the robot base move to follow the detected subject at a set distance. Uses mecanum strafing and IMU feedback for smooth, direct tracking.</p>
+            <div class=\"row\">
+                <button class=\"primary\" id=\"followBtn\">Enable auto follow</button>
+                <div class=\"kv\">Follow: <span id=\"followState\">off</span></div>
+            </div>
+            <div class=\"row\" style=\"margin-top: 8px;\">
+                <div>
+                    <label for=\"followDist\">Target distance (bbox area): <span id=\"followDistVal\">0.04</span></label>
+                    <input id=\"followDist\" type=\"range\" min=\"0.01\" max=\"0.30\" step=\"0.01\" value=\"0.04\" />
+                </div>
+                <div>
+                    <label for=\"followSpeed\">Max speed: <span id=\"followSpeedVal\">0.30</span> m/s</label>
+                    <input id=\"followSpeed\" type=\"range\" min=\"0.05\" max=\"0.50\" step=\"0.05\" value=\"0.30\" />
+                </div>
+            </div>
+            <div class=\"row\" style=\"margin-top: 8px;\">
+                <div>
+                    <label for=\"followStrafe\">Strafe gain: <span id=\"followStrafeVal\">0.50</span></label>
+                    <input id=\"followStrafe\" type=\"range\" min=\"0.0\" max=\"1.0\" step=\"0.05\" value=\"0.50\" />
+                </div>
+                <div>
+                    <label for=\"followGyroDamp\">Gyro damping: <span id=\"followGyroDampVal\">0.15</span></label>
+                    <input id=\"followGyroDamp\" type=\"range\" min=\"0.0\" max=\"0.50\" step=\"0.01\" value=\"0.15\" />
+                </div>
+            </div>
+            <div class=\"row\" style=\"margin-top: 4px;\">
+                <div class=\"kv\">Strafe moves the robot sideways toward the person (mecanum). Gyro damping uses the IMU to reduce angular oscillation.</div>
+            </div>
+        </div>
+
+        <div class=\"card\">
+            <h2>&#127752; Light Bar</h2>
+            <p class=\"muted\">14 addressable WS2812 RGB LEDs. Publishes to <code>lightbar/command</code>.</p>
+            <div class=\"row\">
+                <div>
+                    <label for=\"lbColor\">Colour:</label>
+                    <input id=\"lbColor\" type=\"color\" value=\"#0066ff\" />
+                </div>
+                <button class=\"primary\" id=\"lbSolid\">Solid</button>
+                <button id=\"lbRainbow\">Rainbow</button>
+                <button id=\"lbBreathe\">Breathe</button>
+                <button id=\"lbChase\">Chase</button>
+                <button class=\"danger\" id=\"lbOff\">Off</button>
+            </div>
+            <div class=\"row\" style=\"margin-top: 8px;\">
+                <div class=\"kv\">Mode: <span id=\"lbState\">off</span></div>
+            </div>
+        </div>
+
+        <div class=\"card\">
+            <h2>&#128247; Snapshot</h2>
+            <p class=\"muted\">Capture a full-resolution still from the current camera frame.</p>
+            <div class=\"row\">
+                <button class=\"primary\" id=\"snapBtn\">Take Photo</button>
+                <div class=\"kv\" id=\"snapStatus\"></div>
+            </div>
+            <div id=\"snapHistory\" style=\"margin-top:8px; font-size:12px;\"></div>
+        </div>
+
+        <div class=\"card\" id=\"frontCamCard\">
+            <h2>&#128247; Front Camera</h2>
+            <p class=\"muted\">Pi Camera Module 3 (fixed, front-facing) — for navigation &amp; depth. Publishes on <code>front_camera/compressed</code>.</p>
+            <div style=\"position:relative;width:100%;max-width:640px;\">
+                <img id=\"frontVideo\" src=\"/stream_front.mjpg\" alt=\"front camera stream\" style=\"width:100%;height:auto;background:#111;border-radius:8px;display:block;\" />
+            </div>
+            <div class=\"row\" style=\"margin-top:6px;\">
+                <div class=\"kv\">Front cam: <span id=\"frontCamStatus\">loading…</span></div>
+            </div>
+        </div>
+
+        <div class=\"card\" id=\"depthCard\">
+            <h2>&#127912; Depth Map</h2>
+            <p class=\"muted\">Monocular depth estimation via Hailo-8 (fast_depth). Publishes on <code>depth/colorized/compressed</code>.</p>
+            <div class=\"row\">
+                <button class=\"primary\" id=\"depthToggleBtn\">Disable Depth</button>
+                <label class=\"kv\"><input id=\"depthShowChk\" type=\"checkbox\" checked /> Show depth stream</label>
+                <div class=\"kv\">Depth: <span id=\"depthStatus\">loading…</span></div>
+            </div>
+            <div id=\"depthStreamWrap\" style=\"position:relative;width:100%;max-width:640px;margin-top:8px;\">
+                <img id=\"depthVideo\" src=\"/stream_depth.mjpg\" alt=\"depth map stream\" style=\"width:100%;height:auto;background:#111;border-radius:8px;display:block;\" />
+            </div>
+        </div>
+
+        <div class=\"card\" id=\"odomCard\">
+            <h2>&#128506; Odometry &amp; Navigation</h2>
+            <p class=\"muted\">Sensor-fused position (cmd_vel + IMU + ZUPT). Click to place numbered waypoints, then navigate the planned path. Scroll to zoom, drag to pan, right-click waypoint to remove.</p>
+
+            <div style=\"display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start;\">
+                <!-- Path visualisation canvas -->
+                <div style=\"flex:0 0 auto;text-align:center;\">
+                    <canvas id=\"odomCanvas\" width=\"500\" height=\"500\" style=\"display:block;border:1px solid #ddd;border-radius:8px;background:#fafafa;cursor:crosshair;\"></canvas>
+                    <div class=\"kv\" style=\"margin-top:4px;font-size:11px;\">
+                        <span style=\"color:#e00;\">&#9632;</span> robot &nbsp;
+                        <span style=\"color:#08f;\">&#9632;</span> trail &nbsp;
+                        <span style=\"color:#0a0;\">&#9632;</span> recorded &nbsp;
+                        <span style=\"color:#fa0;\">&#11044;</span> origin &nbsp;
+                        <span style=\"color:#f0f;\">&#9670;</span> waypoint &nbsp;
+                        <span style=\"color:#f80;\">━</span> planned
+                    </div>
+                    <div class=\"kv\" style=\"margin-top:2px;font-size:11px;color:#888;\">Click=add WP, R-click WP=remove, Drag=pan, Scroll=zoom, R-click=reset view</div>
+                </div>
+
+                <!-- Position readout + controls -->
+                <div style=\"flex:1 1 280px;\">
+                    <table style=\"width:100%;border-collapse:collapse;font-size:13px;font-family:ui-monospace,monospace;\">
+                        <tr><td style=\"padding:3px 6px;color:#666;\">X (m)</td><td id=\"odomX\" style=\"padding:3px 6px;font-weight:bold;\">0.000</td></tr>
+                        <tr><td style=\"padding:3px 6px;color:#666;\">Y (m)</td><td id=\"odomY\" style=\"padding:3px 6px;font-weight:bold;\">0.000</td></tr>
+                        <tr><td style=\"padding:3px 6px;color:#666;\">Yaw (°)</td><td id=\"odomYaw\" style=\"padding:3px 6px;font-weight:bold;\">0.0</td></tr>
+                        <tr><td style=\"padding:3px 6px;color:#666;\">Speed</td><td id=\"odomSpeed\" style=\"padding:3px 6px;\">0.000 m/s</td></tr>
+                        <tr><td style=\"padding:3px 6px;color:#666;\">Distance</td><td id=\"odomDist\" style=\"padding:3px 6px;\">0.000 m</td></tr>
+                    </table>
+
+                    <div style=\"margin-top:10px;display:flex;flex-direction:column;gap:6px;\">
+                        <div style=\"display:flex;gap:6px;flex-wrap:wrap;\">
+                            <button id=\"odomSetOrigin\" title=\"Reset position to (0,0,0)\">&#127937; Set Origin</button>
+                            <button class=\"primary\" id=\"odomStartRec\" title=\"Start recording path waypoints\">&#9899; Record</button>
+                            <button id=\"odomStopRec\" title=\"Stop recording\" style=\"display:none;\">&#9724; Stop Rec</button>
+                        </div>
+                        <div style=\"display:flex;gap:6px;flex-wrap:wrap;\">
+                            <button class=\"primary\" id=\"odomReturnBtn\" title=\"Navigate back to origin along recorded path\">&#8617; Return to Origin</button>
+                            <button class=\"danger\" id=\"odomCancelBtn\" title=\"Cancel return-to-origin\" style=\"display:none;\">&#10006; Cancel Return</button>
+                        </div>
+                        <div style=\"display:flex;gap:6px;flex-wrap:wrap;\">
+                            <button class=\"primary\" id=\"odomNavBtn\" title=\"Navigate the planned multi-waypoint path\" style=\"display:none;\">&#128205; Navigate Path</button>
+                            <button class=\"danger\" id=\"odomNavCancelBtn\" title=\"Cancel navigation\" style=\"display:none;\">&#10006; Cancel Nav</button>
+                            <button id=\"odomUndoWpBtn\" title=\"Remove last waypoint\" style=\"display:none;\">&#8630; Undo WP</button>
+                            <button id=\"odomClearWpBtn\" title=\"Clear all waypoints\" style=\"display:none;\">&#128465; Clear All</button>
+                        </div>
+                    </div>
+
+                    <div class=\"kv\" style=\"margin-top:8px;\">
+                        Status: <span id=\"odomStatus\">idle</span>
+                    </div>
+                    <div id=\"odomStuckBanner\" style=\"background:#fdd;border:1px solid #e00;border-radius:6px;padding:6px 10px;margin-top:6px;display:none;font-size:12px;color:#b00;font-weight:bold;\">&#9888; STUCK DETECTED — auto-navigation cancelled</div>
+                    <div class=\"kv\" style=\"margin-top:3px;font-size:11px;color:#888;\">
+                        Waypoints: <span id=\"odomWpCount\">0</span> &nbsp;|&nbsp; Trail: <span id=\"odomTrailCount\">0</span>
+                        &nbsp;|&nbsp; Nav: <span id=\"odomWpTarget\">idle</span>
+                    </div>
+                    <div style=\"margin-top:8px;padding-top:6px;border-top:1px solid #eee;\">
+                        <div class=\"kv\" style=\"font-size:12px;\">&#128506; SLAM Map: <span id=\"slamStatus\" style=\"color:#888;\">waiting…</span></div>
+                        <div style=\"display:flex;gap:6px;margin-top:4px;flex-wrap:wrap;\">
+                            <button id=\"slamResetBtn\" title=\"Clear occupancy grid and reset SLAM\">&#128465; Reset Map</button>
+                            <label style=\"display:flex;align-items:center;gap:4px;font-size:12px;\"><input type=\"checkbox\" id=\"slamOverlay\" checked /> Show map</label>
+                        </div>
+                        <div class=\"kv\" style=\"margin-top:4px;font-size:11px;\">
+                            <span style=\"background:#ddd;display:inline-block;width:10px;height:10px;border:1px solid #aaa;\"></span> free &nbsp;
+                            <span style=\"background:#333;display:inline-block;width:10px;height:10px;border:1px solid #aaa;\"></span> wall &nbsp;
+                            Cells: <span id=\"slamCells\">0</span>
+                        </div>
+                    </div>
+                    <div style=\"margin-top:8px;padding-top:6px;border-top:1px solid #eee;\">
+                        <div class=\"kv\" style=\"font-size:12px;\">&#127993; Front Calibration: <span id=\"calStatus\" style=\"color:#888;\">idle</span></div>
+                        <div style=\"font-size:11px;color:#888;margin:3px 0;\">Place robot facing a wall, then calibrate.</div>
+                        <div style=\"display:flex;gap:6px;margin-top:4px;flex-wrap:wrap;\">
+                            <button id=\"calStaticBtn\" title=\"Static calibration using ultrasonic + LiDAR (no motion)\">&#128270; Static</button>
+                            <button id=\"calFullBtn\" title=\"Full calibration with brief forward drive + IMU check\">&#128296; Full</button>
+                        </div>
+                        <div id=\"calResult\" style=\"margin-top:4px;font-size:11px;color:#555;display:none;background:#f8f8f0;padding:4px 6px;border-radius:3px;border:1px solid #ddd;\"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class=\"card\" id=\"lidarCard\">
+            <h2>&#128752; LiDAR Scan</h2>
+            <p class=\"muted\">Live 360° point cloud from YDLidar T-mini Plus on <code>/scan</code>. Top-down view: forward = up.</p>
+            <div style=\"display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start;\">
+                <div style=\"flex:0 0 auto;text-align:center;\">
+                    <canvas id=\"lidarCanvas\" width=\"400\" height=\"400\" style=\"display:block;border:1px solid #ddd;border-radius:8px;background:#111;\"></canvas>
+                    <div class=\"kv\" style=\"margin-top:4px;font-size:11px;\"><span style=\"color:#0f0;\">&#9632;</span> points &nbsp; <span style=\"color:#e00;\">&#9632;</span> robot &nbsp; rings = range</div>
+                </div>
+                <div style=\"flex:1 1 200px;\">
+                    <table style=\"width:100%;border-collapse:collapse;font-size:13px;font-family:ui-monospace,monospace;\">
+                        <tr><td style=\"padding:3px 6px;color:#666;\">Points</td><td id=\"lidarPoints\" style=\"padding:3px 6px;font-weight:bold;\">0</td></tr>
+                        <tr><td style=\"padding:3px 6px;color:#666;\">Range</td><td id=\"lidarRange\" style=\"padding:3px 6px;\">— m</td></tr>
+                        <tr><td style=\"padding:3px 6px;color:#666;\">FOV</td><td id=\"lidarFov\" style=\"padding:3px 6px;\">—°</td></tr>
+                        <tr><td style=\"padding:3px 6px;color:#666;\">Status</td><td id=\"lidarStatus\" style=\"padding:3px 6px;color:#888;\">waiting…</td></tr>
+                    </table>
+                    <div style=\"margin-top:8px;padding-top:6px;border-top:1px solid #eee;\">
+                        <div class=\"kv\" style=\"font-size:12px;\">&#128737; Obstacle Zones</div>
+                        <table style=\"width:100%;border-collapse:collapse;font-size:12px;font-family:ui-monospace,monospace;margin-top:2px;\">
+                            <tr><td style=\"padding:2px 6px;color:#666;\">Front</td><td id=\"ozFront\" style=\"padding:2px 6px;\">—</td></tr>
+                            <tr><td style=\"padding:2px 6px;color:#666;\">Left</td><td id=\"ozLeft\" style=\"padding:2px 6px;\">—</td></tr>
+                            <tr><td style=\"padding:2px 6px;color:#666;\">Right</td><td id=\"ozRight\" style=\"padding:2px 6px;\">—</td></tr>
+                            <tr><td style=\"padding:2px 6px;color:#666;\">Rear</td><td id=\"ozRear\" style=\"padding:2px 6px;\">—</td></tr>
+                        </table>
+                    </div>
+                    <div style=\"margin-top:10px;\">
+                        <label for=\"lidarZoom\">Zoom: <span id=\"lidarZoomVal\">auto</span></label>
+                        <input id=\"lidarZoom\" type=\"range\" min=\"0\" max=\"12\" step=\"0.5\" value=\"0\" style=\"width:100%;\" />
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class=\"card\" id=\"imuCard\">
+            <h2>&#129517; IMU &amp; Orientation</h2>
+            <p class=\"muted\">Live 6-axis IMU data from Arduino Nano RP2040 Connect. Publishes on <code>imu/data</code>.</p>
+            <div id=\"imuCalBanner\" style=\"background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:8px 12px;margin-bottom:8px;display:none;\">
+                &#9888;&#65039; IMU not calibrated — data may be unreliable. Hold robot still…
+            </div>
+            <div style=\"display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start;\">
+                <!-- 3D Robot orientation view -->
+                <div style=\"flex:0 0 auto;text-align:center;\">
+                    <canvas id=\"imuRobotCanvas\" width=\"200\" height=\"200\" style=\"display:block;margin:0 auto;border:1px solid #ddd;border-radius:8px;background:#fafafa;\"></canvas>
+                    <div class=\"kv\" style=\"margin-top:4px;\">Yaw: <span id=\"imuYawLabel\">0.0</span>° &nbsp; P: <span id=\"imuPitchLabel\">0.0</span>° &nbsp; R: <span id=\"imuRollLabel\">0.0</span>°</div>
+                </div>
+
+                <!-- Data readouts -->
+                <div style=\"flex:1 1 260px;\">
+                    <table style=\"width:100%;border-collapse:collapse;font-size:12px;font-family:ui-monospace,monospace;\">
+                        <thead><tr style=\"border-bottom:1px solid #ddd;\"><th style=\"text-align:left;padding:2px 6px;\">Axis</th><th>Accel (m/s²)</th><th>Gyro (°/s)</th></tr></thead>
+                        <tbody>
+                            <tr><td style=\"padding:2px 6px;font-weight:bold;\">X</td><td id=\"imuAx\" style=\"text-align:center;\">—</td><td id=\"imuGx\" style=\"text-align:center;\">—</td></tr>
+                            <tr><td style=\"padding:2px 6px;font-weight:bold;\">Y</td><td id=\"imuAy\" style=\"text-align:center;\">—</td><td id=\"imuGy\" style=\"text-align:center;\">—</td></tr>
+                            <tr><td style=\"padding:2px 6px;font-weight:bold;\">Z</td><td id=\"imuAz\" style=\"text-align:center;\">—</td><td id=\"imuGz\" style=\"text-align:center;\">—</td></tr>
+                        </tbody>
+                    </table>
+                    <div class=\"kv\" style=\"margin-top:6px;\">
+                        Temp: <span id=\"imuTemp\">—</span> °C &nbsp;|&nbsp;
+                        Mic: <span id=\"imuMic\">—</span> &nbsp;|&nbsp;
+                        Cal: <span id=\"imuCal\">—</span>
+                    </div>
+                    <!-- Yaw top-down compass -->
+                    <div style=\"margin-top:10px;\">
+                        <canvas id=\"imuCompass\" width=\"180\" height=\"180\" style=\"display:block;margin:0 auto;\"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Rotate to angle control -->
+            <div style=\"margin-top:12px;border-top:1px solid #eee;padding-top:10px;\">
+                <h3 style=\"margin:0 0 6px 0;font-size:14px;\">Rotate to Angle</h3>
+                <div class=\"row\">
+                    <div>
+                        <label for=\"imuTargetAngle\">Target: <span id=\"imuTargetVal\">0</span>°</label>
+                        <input id=\"imuTargetAngle\" type=\"range\" min=\"-180\" max=\"180\" step=\"1\" value=\"0\" />
+                    </div>
+                    <div style=\"display:flex;gap:6px;align-items:center;\">
+                        <input id=\"imuAngleInput\" type=\"number\" min=\"-180\" max=\"180\" step=\"1\" value=\"0\" style=\"width:70px;padding:6px;border:1px solid #ccc;border-radius:6px;\" />
+                        <span>°</span>
+                    </div>
+                    <button class=\"primary\" id=\"imuRotateBtn\">Rotate</button>
+                    <button class=\"danger\" id=\"imuRotateStop\">Stop</button>
+                    <button id=\"imuResetYaw\">Reset Yaw</button>
+                </div>
+                <div class=\"row\" style=\"margin-top:6px;\">
+                    <div>
+                        <label for=\"imuRotateSpeed\">Speed: <span id=\"imuRotateSpeedVal\">0.5</span></label>
+                        <input id=\"imuRotateSpeed\" type=\"range\" min=\"0.1\" max=\"1.0\" step=\"0.1\" value=\"0.5\" />
+                    </div>
+                    <div class=\"kv\">Rotation: <span id=\"imuRotateStatus\">idle</span></div>
+                </div>
+            </div>
+        </div>
+
+        <div class=\"card\" id=\"bnoCalCard\" style=\"display:none;\">
+            <h2>&#129517; BNO055 Calibration</h2>
+            <p class=\"muted\">Auto-calibrate the 9-DOF BNO055 sensor. The robot will spin slowly, tilt gently, then hold still. Place on a flat surface before starting.</p>
+            <div style=\"display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;\">
+                <button class=\"primary\" id=\"bnoCalStart\">&#9654; Auto-Calibrate</button>
+                <button class=\"danger\" id=\"bnoCalStop\">&#9724; Cancel</button>
+                <span id=\"bnoCalStateLabel\" style=\"font-size:13px;color:#666;\">idle</span>
+            </div>
+            <div id=\"bnoCalStatus\" style=\"background:#f0f4ff;border:1px solid #c0d0f0;border-radius:6px;padding:10px 12px;margin-bottom:10px;font-size:13px;display:none;\"></div>
+            <div style=\"display:grid;grid-template-columns:80px 1fr 30px;gap:4px 8px;align-items:center;font-size:13px;font-family:ui-monospace,monospace;\">
+                <span>System</span>
+                <div style=\"background:#eee;border-radius:4px;height:18px;overflow:hidden;position:relative;\">
+                    <div id=\"bnoBarSys\" style=\"background:#e74c3c;height:100%;width:0%;transition:width 0.3s;border-radius:4px;\"></div>
+                </div>
+                <span id=\"bnoValSys\">0/3</span>
+                <span>Gyro</span>
+                <div style=\"background:#eee;border-radius:4px;height:18px;overflow:hidden;position:relative;\">
+                    <div id=\"bnoBarGyro\" style=\"background:#3498db;height:100%;width:0%;transition:width 0.3s;border-radius:4px;\"></div>
+                </div>
+                <span id=\"bnoValGyro\">0/3</span>
+                <span>Accel</span>
+                <div style=\"background:#eee;border-radius:4px;height:18px;overflow:hidden;position:relative;\">
+                    <div id=\"bnoBarAccel\" style=\"background:#f39c12;height:100%;width:0%;transition:width 0.3s;border-radius:4px;\"></div>
+                </div>
+                <span id=\"bnoValAccel\">0/3</span>
+                <span>Mag</span>
+                <div style=\"background:#eee;border-radius:4px;height:18px;overflow:hidden;position:relative;\">
+                    <div id=\"bnoBarMag\" style=\"background:#2ecc71;height:100%;width:0%;transition:width 0.3s;border-radius:4px;\"></div>
+                </div>
+                <span id=\"bnoValMag\">0/3</span>
+            </div>
+        </div>
+
+        <div class=\"card\" id=\"micCard\">
+            <h2>&#127908; Microphone</h2>
+            <p class=\"muted\">Stream audio from Arduino Nano PDM mic (8 kHz mono). Uses Web Audio API for browser playback.</p>
+            <div class=\"row\">
+                <button class=\"primary\" id=\"micBtn\">Enable Mic</button>
+                <div style=\"flex:2 1 300px;\">
+                    <div style=\"background:#eee;border-radius:4px;height:20px;overflow:hidden;position:relative;\">
+                        <div id=\"micVu\" style=\"background:linear-gradient(90deg,#4caf50,#ff9800,#f44336);height:100%;width:0%;transition:width 60ms;border-radius:4px;\"></div>
+                    </div>
+                </div>
+                <div>
+                    <label for=\"micVol\">Vol: <span id=\"micVolVal\">80</span>%</label>
+                    <input id=\"micVol\" type=\"range\" min=\"0\" max=\"100\" step=\"5\" value=\"80\" style=\"width:100px;\" />
+                </div>
+            </div>
+            <div class=\"row\" style=\"margin-top:6px;\">
+                <div class=\"kv\">Status: <span id=\"micStatus\">off</span></div>
+                <div class=\"kv\">Buffer: <span id=\"micBufInfo\">-</span></div>
+            </div>
+        </div>
+
+        <div class=\"card\" id=\"faceCard\">
+            <h2>&#128100; Face Recognition</h2>
+            <p class=\"muted\">Manage enrolled faces. Faces are auto-detected and stored with 128-d SFace embeddings in a local SQLite DB.</p>
+            <div class=\"row\" style=\"margin-bottom:8px;\">
+                <button class=\"primary\" id=\"faceRefreshBtn\">Refresh</button>
+                <button class=\"danger\" id=\"faceClearBtn\">Clear All</button>
+                <div class=\"kv\">Enrolled: <span id=\"faceCount\">0</span></div>
+            </div>
+            <div id=\"faceList\" style=\"display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px;\"></div>
+            <div id=\"faceMergePanel\" style=\"margin-top:10px;border-top:1px solid #eee;padding-top:10px;display:none;\">
+                <h3 style=\"margin:0 0 6px;font-size:14px;\">Merge Faces</h3>
+                <div class=\"row\">
+                    <div>
+                        <label>Keep ID: <input id=\"faceKeepId\" type=\"number\" min=\"1\" style=\"width:60px;padding:4px;border:1px solid #ccc;border-radius:4px;\" /></label>
+                    </div>
+                    <div>
+                        <label>Merge ID: <input id=\"faceMergeId\" type=\"number\" min=\"1\" style=\"width:60px;padding:4px;border:1px solid #ccc;border-radius:4px;\" /></label>
+                    </div>
+                    <button class=\"primary\" id=\"faceMergeBtn\">Merge</button>
+                </div>
+            </div>
+        </div>
+
+    </div>
+  </div>
