@@ -317,7 +317,7 @@ class MotorDriverNode(Node):
         self._prev_nonzero = False
 
         self.create_subscription(Twist, 'cmd_vel', self._on_cmd_vel, 10)
-        self._timer = self.create_timer(0.02, self._tick)  # 50Hz
+        self._timer = self.create_timer(0.04, self._tick)  # 25Hz (I2C write limit is 20Hz)
 
         # ── Collision failsafe subscription & publisher ───────────────
         self._collision_enable_sub = self.create_subscription(
@@ -535,6 +535,13 @@ class MotorDriverNode(Node):
             return
 
         now = time.time()
+
+        # Throttle PID computation to ~25 Hz (IMU may publish at 100 Hz
+        # but the PID output is only consumed at 25 Hz by _tick).
+        if hasattr(self, '_last_imu_pid_time'):
+            if (now - self._last_imu_pid_time) < 0.04:
+                return
+        self._last_imu_pid_time = now
 
         # ── Gate: user is intentionally turning ───────────────────────
         recently_turning = (now - self._last_turn_cmd_time) < self._heading_hold_turn_cooldown_sec

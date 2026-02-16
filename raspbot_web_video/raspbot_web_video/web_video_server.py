@@ -1118,7 +1118,7 @@ INDEX_HTML = """<!doctype html>
         fetchStatus();
         setInterval(fetchStatus, 1000);
         fetchDetections();
-        setInterval(fetchDetections, 200);
+        setInterval(fetchDetections, 333);
         drawOverlay();
 
         // ──────────────────────────────────────────────────────────────
@@ -1550,7 +1550,7 @@ INDEX_HTML = """<!doctype html>
 
         // Poll IMU at ~10 Hz
         fetchImu();
-        setInterval(fetchImu, 100);
+        setInterval(fetchImu, 333);
 
         // Front camera status
         const frontCamStatus = document.getElementById('frontCamStatus');
@@ -1771,7 +1771,7 @@ INDEX_HTML = """<!doctype html>
             }
         });
 
-        // Poll collision status from /status endpoint
+        // Poll collision status from /status endpoint (slow – data also in fetchStatus)
         setInterval(async () => {
             try {
                 const r = await fetch('/status');
@@ -1855,7 +1855,7 @@ INDEX_HTML = """<!doctype html>
                     }
                 }
             } catch(e) {}
-        }, 500);
+        }, 2000);
 
         // ──────────────────────────────────────────────────────────────
         // Odometry & Navigation
@@ -2612,7 +2612,7 @@ INDEX_HTML = """<!doctype html>
             } catch(e) {}
         }
 
-        setInterval(fetchOdom, 200);
+        setInterval(fetchOdom, 500);
         fetchOdom();
 
         const allOdomBtns = [odomSetOriginBtn, odomStartRecBtn, odomStopRecBtn,
@@ -2960,8 +2960,8 @@ INDEX_HTML = """<!doctype html>
             } catch(e) {}
         }
 
-        // Poll lidar at 5 Hz
-        setInterval(fetchLidar, 200);
+        // Poll lidar at 2 Hz
+        setInterval(fetchLidar, 500);
         fetchLidar();
 
         // ── LiDAR obstacle zone polling (5 Hz alongside lidar scan) ─
@@ -2987,7 +2987,7 @@ INDEX_HTML = """<!doctype html>
                 ozRearEl.innerHTML = formatZone(d.rear || 99);
             } catch(e) {}
         }
-        setInterval(fetchLidarZones, 200);
+        setInterval(fetchLidarZones, 500);
         fetchLidarZones();
 
         // ──────────────────────────────────────────────────────────────
@@ -3420,7 +3420,7 @@ class WebVideoNode(Node):
         self._imu_calibrate_pub = self.create_publisher(Empty, imu_calibrate_topic, 10)
 
         # Rotate controller timer (20 Hz)
-        self._rotate_timer = self.create_timer(0.05, self._rotate_tick)
+        self._rotate_timer = self.create_timer(0.1, self._rotate_tick)
 
         self.get_logger().info(f"IMU topics: data={imu_data_topic}, yaw={imu_yaw_topic}, cal={imu_cal_topic}")
 

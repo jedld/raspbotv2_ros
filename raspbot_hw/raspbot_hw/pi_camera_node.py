@@ -13,6 +13,7 @@ Requires:
   - libcamera with Raspberry Pi IPA modules, OR GStreamer + gst-libcamera plugin
 """
 
+import threading
 import time
 
 import rclpy
@@ -27,8 +28,8 @@ class PiCameraNode(Node):
         # ── Parameters ────────────────────────────────────────────────
         self.declare_parameter('width', 640)
         self.declare_parameter('height', 480)
-        self.declare_parameter('fps', 30.0)
-        self.declare_parameter('jpeg_quality', 80)
+        self.declare_parameter('fps', 15.0)
+        self.declare_parameter('jpeg_quality', 70)
         self.declare_parameter('topic', 'front_camera/compressed')
         self.declare_parameter('frame_id', 'front_camera_link')
         # Capture backend: auto | libcamera | gstreamer | v4l2
@@ -71,6 +72,7 @@ class PiCameraNode(Node):
         self._cap = None
         self._picam2 = None  # only used for libcamera backend
         self._capture_method = None  # 'libcamera' | 'gstreamer' | 'v4l2'
+        self._gst_jpeg = False  # True when GStreamer pipeline delivers JPEG directly
 
         if self._backend == 'auto':
             if not self._try_gstreamer():
@@ -88,9 +90,13 @@ class PiCameraNode(Node):
         else:
             raise RuntimeError(f'Pi Camera: unknown backend "{self._backend}"')
 
-        # ── Publisher + timer ─────────────────────────────────────────
+        # ── Publisher + capture thread ────────────────────────────
         self._pub = self.create_publisher(CompressedImage, self._topic, 10)
-        self._timer = self.create_timer(1.0 / max(self._fps, 1e-3), self._tick)
+        self._stopped = False
+        self._capture_thread = threading.Thread(
+            target=self._capture_loop, daemon=True
+        )
+        self._capture_thread.start()
 
         self.get_logger().info(
             f'Pi Camera ready (backend={self._capture_method}, '
@@ -121,7 +127,33 @@ class PiCameraNode(Node):
             # af-speed as direct element properties (not extra-controls).
             af_props = self._build_af_properties()
 
-            # Pipeline 1: explicit camera-name with auto-negotiation
+            fps_int = max(1, int(self._fps))
+
+            # Pipelines use videorate max-rate BEFORE videoconvert to
+            # drop excess frames from libcamerasrc before the expensive
+            # color space conversion. This is the key CPU savings.
+            # Pipeline 1: explicit camera-name with rate limit
+            if camera_name:
+                pipelines_to_try.append(
+                    f'libcamerasrc camera-name="{camera_name}"{af_props} ! '
+                    f'videorate max-rate={fps_int} drop-only=true ! '
+                    f'videoconvert ! videoscale ! '
+                    f'video/x-raw,format=BGR,width={self._width},'
+                    f'height={self._height} ! '
+                    f'appsink drop=true sync=false'
+                )
+
+            # Pipeline 2: generic libcamerasrc with rate limit
+            pipelines_to_try.append(
+                f'libcamerasrc{af_props} ! '
+                f'videorate max-rate={fps_int} drop-only=true ! '
+                f'videoconvert ! videoscale ! '
+                f'video/x-raw,format=BGR,width={self._width},'
+                f'height={self._height} ! '
+                f'appsink drop=true sync=false'
+            )
+
+            # Pipeline 3: fallback without videorate (original)
             if camera_name:
                 pipelines_to_try.append(
                     f'libcamerasrc camera-name="{camera_name}"{af_props} ! '
@@ -130,8 +162,6 @@ class PiCameraNode(Node):
                     f'height={self._height} ! '
                     f'appsink drop=true sync=false'
                 )
-
-            # Pipeline 2: generic libcamerasrc (auto camera)
             pipelines_to_try.append(
                 f'libcamerasrc{af_props} ! '
                 f'videoconvert ! videoscale ! '
@@ -253,43 +283,76 @@ class PiCameraNode(Node):
                 pass
         return False
 
-    # ── Frame capture ─────────────────────────────────────────────────
+    # ── Frame capture (dedicated thread) ────────────────────────
 
-    def _tick(self) -> None:
-        frame = self._capture_frame()
-        if frame is None:
-            return
+    def _capture_loop(self) -> None:
+        """Blocking capture loop — runs in its own thread.
 
+        The GStreamer ISP pipeline delivers frames at native sensor rate
+        (~30fps) regardless of settings.  We use grab() to drain the
+        pipeline cheaply and only call retrieve()+imencode() at our
+        target FPS, saving the expensive BGR copy + JPEG encode on
+        skipped frames.
+        """
         cv2 = self._cv2
-        ok, buf = cv2.imencode(
-            '.jpg',
-            frame,
-            [int(cv2.IMWRITE_JPEG_QUALITY), int(self._jpeg_quality)],
-        )
-        if not ok:
-            self.get_logger().warn('Pi Camera: JPEG encode failed')
-            return
+        min_period = 1.0 / max(self._fps, 1e-3)
+        last_publish = 0.0
 
-        msg = CompressedImage()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = self._frame_id
-        msg.format = 'jpeg'
-        msg.data = buf.tobytes()
-        self._pub.publish(msg)
-
-    def _capture_frame(self):
-        """Read a frame from whichever backend is active. Returns numpy array or None."""
-        if self._cap is not None:
-            ok, frame = self._cap.read()
+        while not self._stopped and self._cap is not None:
+            # Drain the pipeline buffer (cheap — no pixel copy)
+            ok = self._cap.grab()
             if not ok:
-                self.get_logger().warn('Pi Camera: frame grab failed', throttle_duration_sec=5.0)
-                return None
-            return frame
-        return None
+                self.get_logger().warn(
+                    'Pi Camera: frame grab failed',
+                    throttle_duration_sec=5.0,
+                )
+                time.sleep(0.1)
+                continue
+
+            now = time.monotonic()
+
+            # Skip work if nobody is subscribed
+            if self._pub.get_subscription_count() == 0:
+                time.sleep(0.01)
+                continue
+
+            # Only retrieve + encode + publish at target FPS
+            if (now - last_publish) < min_period:
+                continue
+
+            ok, frame = self._cap.retrieve()
+            if not ok or frame is None:
+                continue
+
+            if self._gst_jpeg:
+                jpeg_bytes = frame.tobytes()
+            else:
+                ok, buf = cv2.imencode(
+                    '.jpg',
+                    frame,
+                    [int(cv2.IMWRITE_JPEG_QUALITY), int(self._jpeg_quality)],
+                )
+                if not ok:
+                    continue
+                jpeg_bytes = buf.tobytes()
+
+            msg = CompressedImage()
+            msg.header.stamp = self.get_clock().now().to_msg()
+            msg.header.frame_id = self._frame_id
+            msg.format = 'jpeg'
+            msg.data = jpeg_bytes
+            self._pub.publish(msg)
+            last_publish = now
 
     # ── Cleanup ───────────────────────────────────────────────────────
 
     def destroy_node(self):
+        self._stopped = True
+        try:
+            if self._capture_thread.is_alive():
+                self._capture_thread.join(timeout=2.0)
+        except Exception:
+            pass
         try:
             if self._cap is not None:
                 self._cap.release()

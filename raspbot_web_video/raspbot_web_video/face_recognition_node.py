@@ -90,7 +90,7 @@ class FaceRecognitionNode(Node):
 
         # ── State ───────────────────────────────────────────────────
         self._lock = threading.Lock()
-        self._latest_frame: Optional[np.ndarray] = None  # BGR
+        self._latest_jpeg: Optional[bytes] = None   # raw JPEG bytes (not decoded)
         self._latest_frame_stamp: Optional[tuple] = None  # (sec, nanosec)
         self._last_process_time = 0.0
         self._auto_name_counter = self._db.num_faces  # for "Person N"
@@ -117,13 +117,9 @@ class FaceRecognitionNode(Node):
     # Callbacks
     # ------------------------------------------------------------------
     def _on_image(self, msg: CompressedImage) -> None:
-        """Cache the latest camera frame (decoded lazily)."""
-        buf = np.frombuffer(msg.data, dtype=np.uint8)
-        frame = cv2.imdecode(buf, cv2.IMREAD_COLOR)
-        if frame is None:
-            return
+        """Cache the latest camera frame as raw JPEG (decode only when needed)."""
         with self._lock:
-            self._latest_frame = frame
+            self._latest_jpeg = bytes(msg.data)
             self._latest_frame_stamp = (
                 msg.header.stamp.sec,
                 msg.header.stamp.nanosec,
@@ -150,15 +146,21 @@ class FaceRecognitionNode(Node):
 
         # Grab frame snapshot
         with self._lock:
-            frame = self._latest_frame
+            jpeg_data = self._latest_jpeg
             frame_stamp = self._latest_frame_stamp
 
         now = time.monotonic()
         should_process = (now - self._last_process_time) >= self._process_interval
 
-        if should_process and frame is not None:
-            self._last_process_time = now
-            self._process_faces(detections, frame, img_w, img_h)
+        if should_process and jpeg_data is not None:
+            # Decode JPEG only now — avoids decoding 30fps when we process 2fps
+            buf = np.frombuffer(jpeg_data, dtype=np.uint8)
+            frame = cv2.imdecode(buf, cv2.IMREAD_COLOR)
+            if frame is not None:
+                self._last_process_time = now
+                self._process_faces(detections, frame, img_w, img_h)
+            else:
+                self._annotate_from_cache(detections)
         else:
             # Still annotate from track-id cache (stale but useful)
             self._annotate_from_cache(detections)

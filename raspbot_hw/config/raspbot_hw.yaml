@@ -36,8 +36,8 @@ motor_driver:
     invert_fr: false
     invert_rl: false
     invert_rr: false
-    # I2C write rate. Higher values reduce latency; 50Hz keeps updates responsive.
-    write_hz: 50.0
+    # I2C write rate. 25Hz keeps updates responsive while reducing CPU overhead.
+    write_hz: 25.0
     cmd_vel_timeout_sec: 1.0
     idle_stop_period_sec: 1.0
     # PID heading-hold: uses IMU yaw heading + gyro rate to correct drift when
@@ -175,8 +175,8 @@ opencv_camera:
     frame_id: "camera_link"
     width: 640
     height: 480
-    fps: 30.0
-    jpeg_quality: 80
+    fps: 15.0
+    jpeg_quality: 70
     topic: "image_raw/compressed"
 
 pi_camera:

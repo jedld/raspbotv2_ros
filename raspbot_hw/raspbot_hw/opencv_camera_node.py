@@ -1,5 +1,6 @@
 import glob
 import os
+import threading
 import time
 
 import rclpy
@@ -69,8 +70,8 @@ class OpenCVCameraNode(Node):
         self.declare_parameter('frame_id', 'camera_link')
         self.declare_parameter('width', 640)
         self.declare_parameter('height', 480)
-        self.declare_parameter('fps', 30.0)
-        self.declare_parameter('jpeg_quality', 80)
+        self.declare_parameter('fps', 15.0)
+        self.declare_parameter('jpeg_quality', 70)
         self.declare_parameter('topic', 'image_raw/compressed')
 
         self._device_index = int(self.get_parameter('device_index').value)
@@ -114,36 +115,86 @@ class OpenCVCameraNode(Node):
         if not self._cap.isOpened():
             raise RuntimeError(f'Failed to open camera device index {self._device_index}')
 
+        # Check if we can grab raw MJPEG to avoid decode→re-encode
+        fourcc = int(self._cap.get(self._cv2.CAP_PROP_FOURCC))
+        mjpg_fourcc = self._cv2.VideoWriter_fourcc(*'MJPG')
+        self._raw_mjpeg = (fourcc == mjpg_fourcc)
+        if self._raw_mjpeg:
+            # Request raw buffer (no BGR conversion)
+            self._cap.set(self._cv2.CAP_PROP_CONVERT_RGB, 0)
+
         self._pub = self.create_publisher(CompressedImage, self._topic, 10)
-        self._timer = self.create_timer(1.0 / max(self._fps, 1e-3), self._tick)
+        self._stopped = False
+        self._capture_thread = threading.Thread(
+            target=self._capture_loop, daemon=True
+        )
+        self._capture_thread.start()
 
         self.get_logger().info(
-            f'Camera ready (device={self._device_index}, {self._width}x{self._height}@{self._fps}Hz) publishing {self._topic}'
+            f'Camera ready (device={self._device_index}, {self._width}x{self._height}@{self._fps}Hz, '
+            f'raw_mjpeg={self._raw_mjpeg}) publishing {self._topic}'
         )
 
-    def _tick(self) -> None:
-        ok, frame = self._cap.read()
-        if not ok:
-            self.get_logger().warn('Camera frame grab failed')
-            return
+    def _capture_loop(self) -> None:
+        """Blocking capture loop in dedicated thread."""
+        cv2 = self._cv2
+        min_period = 1.0 / max(self._fps, 1e-3)
 
-        ok, buf = self._cv2.imencode(
-            '.jpg',
-            frame,
-            [int(self._cv2.IMWRITE_JPEG_QUALITY), int(self._jpeg_quality)],
-        )
-        if not ok:
-            self.get_logger().warn('JPEG encode failed')
-            return
+        while not self._stopped:
+            # Skip work if nobody is subscribed
+            if self._pub.get_subscription_count() == 0:
+                self._cap.grab()
+                time.sleep(min_period)
+                continue
 
-        msg = CompressedImage()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = self._frame_id
-        msg.format = 'jpeg'
-        msg.data = buf.tobytes()
+            t0 = time.monotonic()
+
+            if self._raw_mjpeg:
+                # Grab raw JPEG buffer — no BGR decode → no re-encode
+                ok = self._cap.grab()
+                if not ok:
+                    time.sleep(0.05)
+                    continue
+                ok, raw = self._cap.retrieve(0, cv2.CAP_PROP_CONVERT_RGB)
+                if not ok or raw is None:
+                    time.sleep(0.05)
+                    continue
+                jpeg_bytes = raw.tobytes()
+            else:
+                ok, frame = self._cap.read()
+                if not ok:
+                    self.get_logger().warn('Camera frame grab failed')
+                    time.sleep(0.05)
+                    continue
+                ok, buf = cv2.imencode(
+                    '.jpg',
+                    frame,
+                    [int(cv2.IMWRITE_JPEG_QUALITY), int(self._jpeg_quality)],
+                )
+                if not ok:
+                    continue
+                jpeg_bytes = buf.tobytes()
+
+            msg = CompressedImage()
+            msg.header.stamp = self.get_clock().now().to_msg()
+            msg.header.frame_id = self._frame_id
+            msg.format = 'jpeg'
+            msg.data = jpeg_bytes
+            self._pub.publish(msg)
+
+            elapsed = time.monotonic() - t0
+            remaining = min_period - elapsed
+            if remaining > 0:
+                time.sleep(remaining)
         self._pub.publish(msg)
 
     def destroy_node(self):
+        self._stopped = True
+        try:
+            if self._capture_thread.is_alive():
+                self._capture_thread.join(timeout=2.0)
+        except Exception:
+            pass
         try:
             self._cap.release()
         except Exception:
