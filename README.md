@@ -49,6 +49,40 @@ The service runs as the `jedld` user with I2C, GPIO, video, dialout, and
 plugdev group access. It waits for network (up to 30 s) before launching so the
 OLED can display the IP, and depends on `hailort.service` for the Hailo-8.
 
+### Updating the service after code changes
+
+The systemd service loads nodes from the **install/** overlay, so any source
+code or config changes require a rebuild + service restart to take effect:
+
+```bash
+# 1. Rebuild the changed package(s)
+cd ~/ros2_foxy
+source install/setup.bash
+colcon build --packages-select raspbot_hw          # ← replace with the package(s) you changed
+# Tip: add --symlink-install so that Python files & config YAML are
+#       symlinked instead of copied — future edits take effect on restart
+#       without a rebuild.
+
+# 2. Restart the service to pick up changes
+sudo systemctl restart raspbot
+
+# 3. Verify it's running
+sudo systemctl status raspbot --no-pager
+sudo journalctl -u raspbot -f          # live logs
+```
+
+If the **service unit file itself** (`raspbot_bringup/systemd/raspbot.service`)
+was changed, you must also re-copy it and reload systemd:
+
+```bash
+sudo cp src/raspbot_ros2/raspbot_bringup/systemd/raspbot.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl restart raspbot
+```
+
+> **Common pitfall:** forgetting `daemon-reload` after copying a new unit file.
+> systemd will keep running the old version until you reload.
+
 ## Cardputer Bluetooth teleop (default-enabled)
 
 `raspbot_bringup` starts BLE Cardputer teleop by default:

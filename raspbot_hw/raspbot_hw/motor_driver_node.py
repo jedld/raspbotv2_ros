@@ -260,6 +260,7 @@ class MotorDriverNode(Node):
         self._last_cmd_time = None
         self._last_idle_stop_time = 0.0
         self._last_write_time = 0.0
+        self._zero_stop_sent = False  # guard against repeated _car.stop() I2C writes
         self._left_pwm = 0.0
         self._right_pwm = 0.0
 
@@ -1033,13 +1034,19 @@ class MotorDriverNode(Node):
 
         # ── Hard stop: when ALL base PWMs are zero, send an explicit stop ──
         # This prevents residual heading-hold / trim from spinning motors.
+        # Guard: only send the stop I2C command once to avoid wasting bus bandwidth.
         if not self._is_any_motion_commanded():
-            try:
-                self._car.stop()
-            except Exception as e:
-                self.get_logger().warn(f'Failed to stop motors (zero cmd): {e!r}')
-            self._last_write_time = now
+            if not self._zero_stop_sent:
+                try:
+                    self._car.stop()
+                except Exception as e:
+                    self.get_logger().warn(f'Failed to stop motors (zero cmd): {e!r}')
+                self._zero_stop_sent = True
+                self._last_write_time = now
             return
+
+        # We have active motion — clear the stop guard.
+        self._zero_stop_sent = False
 
         try:
             if self._drive_mode == 'mecanum' and self._car.protocol == 'pi5':
