@@ -52,7 +52,29 @@ OLED can display the IP, and depends on `hailort.service` for the Hailo-8.
 ### Updating the service after code changes
 
 The systemd service loads nodes from the **install/** overlay, so any source
-code or config changes require a rebuild + service restart to take effect:
+code or config changes require a rebuild + service restart to take effect.
+
+The easiest way is the **`sync_service.sh`** script at the repo root:
+
+```bash
+# Rebuild ALL raspbot packages, sync the unit file if changed, and restart
+./sync_service.sh
+
+# Rebuild only specific package(s)
+./sync_service.sh raspbot_hw
+./sync_service.sh raspbot_hw raspbot_teleop
+
+# Only re-copy the systemd unit file (skip build)
+./sync_service.sh --service-only
+```
+
+The script will:
+1. `colcon build --symlink-install` the requested packages
+2. Compare the source service unit file against `/etc/systemd/system/raspbot.service` — if they differ, copy and `daemon-reload` automatically
+3. Restart the service and verify it's running
+
+<details>
+<summary>Manual steps (if you prefer not to use the script)</summary>
 
 ```bash
 # 1. Rebuild the changed package(s)
@@ -82,6 +104,8 @@ sudo systemctl restart raspbot
 
 > **Common pitfall:** forgetting `daemon-reload` after copying a new unit file.
 > systemd will keep running the old version until you reload.
+
+</details>
 
 ## Cardputer Bluetooth teleop (default-enabled)
 

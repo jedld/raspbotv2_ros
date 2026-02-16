@@ -8,6 +8,7 @@
 #include <sensor_msgs/msg/range.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/float64.hpp>
+#include <std_msgs/msg/int32.hpp>
 #include <std_msgs/msg/int32_multi_array.hpp>
 #include <std_msgs/msg/string.hpp>
 
@@ -97,6 +98,7 @@ public:
 
         // Tracking
         declare_parameter<bool>("tracking_enabled", false);
+        declare_parameter<std::string>("tracking_select_topic", "tracking/select_id");
         declare_parameter<int>("track_class_id", -1);
         declare_parameter<std::string>("track_label", "face");  // auto-pick: prefer face, fallback to person
         declare_parameter<double>("kp_pan_deg", 28.0);
@@ -198,6 +200,18 @@ public:
             [this](const std_msgs::msg::Bool::SharedPtr msg) {
                 tracking_enabled_.store(static_cast<bool>(msg->data));
             });
+
+        const auto tracking_select_topic = get_parameter("tracking_select_topic").as_string();
+        tracking_select_sub_ = create_subscription<std_msgs::msg::Int32>(
+            tracking_select_topic, 10,
+            [this](const std_msgs::msg::Int32::SharedPtr msg) {
+                const int prev = selected_track_id_.exchange(msg->data);
+                if (prev != msg->data) {
+                    RCLCPP_INFO(get_logger(), "Person selection: %s",
+                        msg->data < 0 ? "cleared (auto)" : ("locked to track_id=" + std::to_string(msg->data)).c_str());
+                }
+            });
+        RCLCPP_INFO(get_logger(), "Tracking select topic: %s", tracking_select_topic.c_str());
 
         tracking_cfg_sub_ = create_subscription<std_msgs::msg::Int32MultiArray>(
             tracking_config_topic, 10,
@@ -357,7 +371,87 @@ private:
         float y1;
         float x2;
         float y2;
+        int track_id{-1};
     };
+
+    static float compute_iou(const Det &a, const Det &b)
+    {
+        const float ix1 = std::max(a.x1, b.x1);
+        const float iy1 = std::max(a.y1, b.y1);
+        const float ix2 = std::min(a.x2, b.x2);
+        const float iy2 = std::min(a.y2, b.y2);
+        const float iw = std::max(0.0f, ix2 - ix1);
+        const float ih = std::max(0.0f, iy2 - iy1);
+        const float inter = iw * ih;
+        const float area_a = (a.x2 - a.x1) * (a.y2 - a.y1);
+        const float area_b = (b.x2 - b.x1) * (b.y2 - b.y1);
+        const float uni = area_a + area_b - inter;
+        return (uni > 1e-6f) ? (inter / uni) : 0.0f;
+    }
+
+    struct Track {
+        int id;
+        Det last_det;
+        int age{0};
+    };
+
+    void update_tracks(std::vector<Det> &dets)
+    {
+        constexpr float IOU_THRESH = 0.20f;
+        constexpr int MAX_LOST_FRAMES = 30;
+        const size_t n_tracks = tracks_.size();
+        const size_t n_dets = dets.size();
+
+        struct Cand { size_t ti; size_t di; float iou_val; };
+        std::vector<Cand> candidates;
+        candidates.reserve(n_tracks * n_dets);
+
+        for (size_t t = 0; t < n_tracks; t++) {
+            for (size_t d = 0; d < n_dets; d++) {
+                const float s = compute_iou(tracks_[t].last_det, dets[d]);
+                if (s >= IOU_THRESH) {
+                    candidates.push_back({t, d, s});
+                }
+            }
+        }
+        std::sort(candidates.begin(), candidates.end(),
+                  [](const Cand &a, const Cand &b) { return a.iou_val > b.iou_val; });
+
+        std::vector<bool> trk_used(n_tracks, false);
+        std::vector<bool> det_used(n_dets, false);
+
+        for (const auto &c : candidates) {
+            if (trk_used[c.ti] || det_used[c.di]) continue;
+            trk_used[c.ti] = true;
+            det_used[c.di] = true;
+            dets[c.di].track_id = tracks_[c.ti].id;
+            tracks_[c.ti].last_det = dets[c.di];
+            tracks_[c.ti].age = 0;
+        }
+
+        for (size_t d = 0; d < n_dets; d++) {
+            if (!det_used[d]) {
+                const int new_id = next_track_id_++;
+                dets[d].track_id = new_id;
+                tracks_.push_back(Track{new_id, dets[d], 0});
+            }
+        }
+
+        std::vector<Track> surviving;
+        surviving.reserve(tracks_.size());
+        for (size_t t = 0; t < n_tracks; t++) {
+            if (!trk_used[t]) {
+                tracks_[t].age++;
+            }
+            if (tracks_[t].age <= MAX_LOST_FRAMES) {
+                surviving.push_back(tracks_[t]);
+            }
+        }
+        for (size_t t = n_tracks; t < tracks_.size(); t++) {
+            surviving.push_back(tracks_[t]);
+        }
+        tracks_ = std::move(surviving);
+    }
 
     void load_labels()
     {
@@ -704,8 +798,10 @@ private:
             const float x2 = clampf(d.x_max, 0.0f, 1.0f);
             const float y2 = clampf(d.y_max, 0.0f, 1.0f);
 
-            dets.push_back(Det{static_cast<int>(d.class_id), d.score, x1, y1, x2, y2});
+            dets.push_back(Det{static_cast<int>(d.class_id), d.score, x1, y1, x2, y2, -1});
         }
+
+        update_tracks(dets);
 
         publish_detections_json(msg->header.stamp.sec, msg->header.stamp.nanosec, orig_w, orig_h, dets);
 
@@ -751,6 +847,7 @@ private:
             ss << "{\"class_id\":" << d.class_id
                << ",\"label\":\"" << label << "\""
                << ",\"score\":" << d.score
+               << ",\"track_id\":" << d.track_id
                << ",\"x\":" << x
                << ",\"y\":" << y
                << ",\"w\":" << w
@@ -767,6 +864,7 @@ private:
     void maybe_track_person(int image_w, int image_h, const std::vector<Det> &dets)
     {
         const int track_id = track_class_id_cached_;
+        const int sel_id = selected_track_id_.load();
 
         const float score_thresh = static_cast<float>(get_parameter("score_threshold").as_double());
 
@@ -774,6 +872,7 @@ private:
         for (const auto &d : dets) {
             if (d.score < score_thresh) continue;
             if (track_id >= 0 && d.class_id != track_id) continue;
+            if (sel_id >= 0 && d.track_id != sel_id) continue;
             if (best == nullptr || d.score > best->score) {
                 best = &d;
             }
@@ -844,6 +943,7 @@ private:
     void follow_subject(const std::vector<Det> &dets)
     {
         const int track_id = track_class_id_cached_;
+        const int sel_id = selected_track_id_.load();
 
         const float score_thresh = static_cast<float>(get_parameter("score_threshold").as_double());
 
@@ -851,6 +951,7 @@ private:
         for (const auto &d : dets) {
             if (d.score < score_thresh) continue;
             if (track_id >= 0 && d.class_id != track_id) continue;
+            if (sel_id >= 0 && d.track_id != sel_id) continue;
             if (best == nullptr || d.score > best->score) {
                 best = &d;
             }
@@ -1198,11 +1299,17 @@ private:
     rclcpp::Subscription<sensor_msgs::msg::CompressedImage>::SharedPtr img_sub_;
     rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr tracking_sub_;
     rclcpp::Subscription<std_msgs::msg::Int32MultiArray>::SharedPtr tracking_cfg_sub_;
+    rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr tracking_select_sub_;
     rclcpp::TimerBase::SharedPtr load_timer_;
 
     std::atomic<bool> tracking_enabled_{false};
     std::atomic<int> pan_sign_live_{1};
     std::atomic<int> tilt_sign_live_{1};
+    std::atomic<int> selected_track_id_{-1};
+
+    // IoU-based multi-object tracker
+    std::vector<Track> tracks_;
+    int next_track_id_{1};
 
     std::shared_ptr<hailort::VDevice> vdevice_;
     std::shared_ptr<hailort::InferModel> infer_model_;

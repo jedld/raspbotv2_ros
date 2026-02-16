@@ -39,6 +39,7 @@ INDEX_HTML = """<!doctype html>
     .videoWrap { position: relative; width: 100%; }
     img { width: 100%; height: auto; background: #111; border-radius: 8px; display: block; }
     canvas.overlay { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; }
+    canvas.overlay.selectable { pointer-events: auto; cursor: crosshair; }
     code { background: #e8e8e8; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
     .muted { color: #888; font-size: 12px; margin: 2px 0 6px; }
     .card { border: 1px solid #dde0e4; border-radius: 10px; padding: 12px; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
@@ -150,7 +151,10 @@ INDEX_HTML = """<!doctype html>
             </div>
             <div class=\"row\" style=\"margin-top: 8px;\">
                 <div class=\"kv\">Detections: <span id=\"detState\">n/a</span></div>
+                <div class=\"kv\">Selected: <span id=\"selectedState\">none</span></div>
+                <button id=\"clearSelBtn\" style=\"flex: 0 0 auto;\">Clear selection</button>
             </div>
+            <p class=\"muted\" style=\"margin-top: 4px;\">Click on a detected person in the video to select them for exclusive tracking/following.</p>
         </div>
 
         <div class=\"card\">
@@ -487,6 +491,8 @@ INDEX_HTML = """<!doctype html>
         const invTiltChk = document.getElementById('invTiltChk');
         const followBtn = document.getElementById('followBtn');
         const followStateEl = document.getElementById('followState');
+        const selectedStateEl = document.getElementById('selectedState');
+        const clearSelBtn = document.getElementById('clearSelBtn');
         const followDist = document.getElementById('followDist');
         const followDistVal = document.getElementById('followDistVal');
         const followSpeed = document.getElementById('followSpeed');
@@ -497,6 +503,7 @@ INDEX_HTML = """<!doctype html>
         const followGyroDampVal = document.getElementById('followGyroDampVal');
 
         let debounceTimer = null;
+        let selectedPersonId = -1;
 
         /* Track when a user last touched each slider so the status poll
            does not overwrite the value while the user is still dragging. */
@@ -541,6 +548,11 @@ INDEX_HTML = """<!doctype html>
                     }
                     if (typeof j.tracking.tilt_sign === 'number') {
                         invTiltChk.checked = (Number(j.tracking.tilt_sign) < 0);
+                    }
+                    // Sync person selection state from server
+                    if (typeof j.tracking.selected_person_id === 'number') {
+                        selectedPersonId = j.tracking.selected_person_id;
+                        updateSelectionUi();
                     }
                 }
                 if (j.follow) {
@@ -623,6 +635,86 @@ INDEX_HTML = """<!doctype html>
             const enabled = (followStateEl.textContent === 'on');
             await setFollow(!enabled);
         });
+
+        // ---- Person selection (click-to-track) ----
+
+        async function selectPerson(personId) {
+            selectedPersonId = personId;
+            updateSelectionUi();
+            try {
+                await fetch('/api/tracking/select', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({person_id: personId})
+                });
+            } catch (e) { /* ignore */ }
+        }
+
+        async function clearSelection() {
+            await selectPerson(-1);
+        }
+
+        function updateSelectionUi() {
+            if (selectedPersonId >= 0) {
+                selectedStateEl.textContent = `Person #${selectedPersonId}`;
+                selectedStateEl.style.color = '#00aaff';
+                selectedStateEl.style.fontWeight = 'bold';
+                overlay.classList.add('selectable');
+            } else {
+                selectedStateEl.textContent = 'none';
+                selectedStateEl.style.color = '';
+                selectedStateEl.style.fontWeight = '';
+            }
+        }
+
+        // Make overlay clickable when boxes are visible.
+        // Toggle selectability based on checkbox (always selectable when boxes on).
+        function updateOverlayClickable() {
+            if (boxesChk.checked) {
+                overlay.classList.add('selectable');
+            } else {
+                overlay.classList.remove('selectable');
+            }
+        }
+        boxesChk.addEventListener('change', updateOverlayClickable);
+        updateOverlayClickable();
+
+        overlay.addEventListener('click', (e) => {
+            const j = latestDet;
+            if (!j || !Array.isArray(j.detections) || !j.image_width || !j.image_height) return;
+
+            const rect = overlay.getBoundingClientRect();
+            const clickX = (e.clientX - rect.left) * (overlay.width / rect.width);
+            const clickY = (e.clientY - rect.top) * (overlay.height / rect.height);
+
+            const sx = overlay.width / Number(j.image_width);
+            const sy = overlay.height / Number(j.image_height);
+
+            // Find the smallest detection (most specific) containing the click.
+            let bestDet = null;
+            let bestArea = Infinity;
+            for (const d of j.detections) {
+                const x = Number(d.x) * sx;
+                const y = Number(d.y) * sy;
+                const w = Number(d.w) * sx;
+                const h = Number(d.h) * sy;
+                if (!Number.isFinite(x + y + w + h)) continue;
+                if (clickX >= x && clickX <= x + w && clickY >= y && clickY <= y + h) {
+                    const area = w * h;
+                    if (area < bestArea && typeof d.track_id === 'number' && d.track_id >= 0) {
+                        bestArea = area;
+                        bestDet = d;
+                    }
+                }
+            }
+
+            if (bestDet) {
+                selectPerson(bestDet.track_id);
+            }
+        });
+
+        clearSelBtn.addEventListener('click', () => clearSelection());
+        updateSelectionUi();
 
         async function sendFollowConfig(targetArea, maxLinear, strafeGain, gyroDamping) {
             const body = {target_bbox_area: Number(targetArea), max_linear: Number(maxLinear)};
@@ -781,18 +873,24 @@ INDEX_HTML = """<!doctype html>
                 const h = Number(d.h) * sy;
                 if (!Number.isFinite(x+y+w+h)) continue;
 
-                ctx.strokeStyle = '#00ff66';
-                ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+                const tid = (typeof d.track_id === 'number') ? d.track_id : -1;
+                const isSelected = (selectedPersonId >= 0 && tid === selectedPersonId);
+
+                ctx.strokeStyle = isSelected ? '#00aaff' : '#00ff66';
+                ctx.lineWidth = isSelected ? 3 : 2;
+                ctx.fillStyle = isSelected ? 'rgba(0, 100, 255, 0.55)' : 'rgba(0, 0, 0, 0.45)';
                 ctx.strokeRect(x, y, w, h);
 
                 const label = String(d.label ?? d.class_id ?? '?');
                 const score = Number(d.score);
-                const text = Number.isFinite(score) ? `${label} ${(score*100).toFixed(0)}%` : label;
+                const idTag = tid >= 0 ? `#${tid} ` : '';
+                const text = Number.isFinite(score) ? `${idTag}${label} ${(score*100).toFixed(0)}%` : `${idTag}${label}`;
                 const tw = ctx.measureText(text).width + 6;
                 const th = 14;
                 ctx.fillRect(x, Math.max(0, y - th), tw, th);
                 ctx.fillStyle = '#ffffff';
                 ctx.fillText(text, x + 3, Math.max(0, y - th) + 1);
+                ctx.lineWidth = 2;  // reset
             }
 
             // Stale indicator
@@ -3011,6 +3109,7 @@ class WebVideoNode(Node):
         self.declare_parameter("detections_topic", "detections/json")
         self.declare_parameter("tracking_enable_topic", "tracking/enable")
         self.declare_parameter("tracking_config_topic", "tracking/config")
+        self.declare_parameter("tracking_select_topic", "tracking/select_id")
         self.declare_parameter("follow_enable_topic", "follow/enable")
         self.declare_parameter("follow_target_area_topic", "follow/target_area")
         self.declare_parameter("follow_max_linear_topic", "follow/max_linear")
@@ -3088,6 +3187,11 @@ class WebVideoNode(Node):
         self.get_logger().info(
             f"Tracking config topic: {tracking_config_topic} (std_msgs/Int32MultiArray [pan_sign, tilt_sign])"
         )
+
+        tracking_select_topic = str(self.get_parameter("tracking_select_topic").value)
+        self._selected_person_id = -1
+        self._tracking_select_pub = self.create_publisher(Int32, tracking_select_topic, 10)
+        self.get_logger().info(f"Tracking select topic: {tracking_select_topic} (std_msgs/Int32)")
 
         follow_enable_topic = str(self.get_parameter("follow_enable_topic").value)
         self._follow_enabled = False
@@ -3577,6 +3681,7 @@ class WebVideoNode(Node):
                 'enabled': bool(self._tracking_enabled),
                 'pan_sign': int(self._tracking_pan_sign),
                 'tilt_sign': int(self._tracking_tilt_sign),
+                'selected_person_id': int(self._selected_person_id),
             },
             'follow': {
                 'enabled': bool(self._follow_enabled),
@@ -3705,6 +3810,15 @@ class WebVideoNode(Node):
         msg = Int32MultiArray()
         msg.data = [int(self._tracking_pan_sign), int(self._tracking_tilt_sign)]
         self._tracking_config_pub.publish(msg)
+
+    def set_person_select(self, person_id: int) -> None:
+        """Select a specific person by track_id for exclusive tracking/following.
+        -1 clears the selection (auto mode)."""
+        self._selected_person_id = int(person_id)
+        msg = Int32()
+        msg.data = int(person_id)
+        self._tracking_select_pub.publish(msg)
+        self.get_logger().info(f"Person selection: {'cleared' if person_id < 0 else f'track_id={person_id}'}")
 
     def set_lightbar_command(self, cmd: dict) -> None:
         """Forward a JSON lightbar command to the lightbar/command topic."""
@@ -4538,6 +4652,7 @@ def make_handler(
     cmd_vel_stopper=None,
     tracking_setter=None,
     tracking_config_setter=None,
+    person_select_setter=None,
     follow_setter=None,
     follow_config_setter=None,
     snapshot_taker=None,
@@ -5258,6 +5373,41 @@ def make_handler(
                 self.end_headers()
                 return
 
+            if path == '/api/tracking/select':
+                if not callable(person_select_setter):
+                    self.send_response(HTTPStatus.NOT_IMPLEMENTED)
+                    self.end_headers()
+                    return
+
+                try:
+                    length = int(self.headers.get('Content-Length', '0'))
+                except Exception:
+                    length = 0
+                if length <= 0 or length > 8192:
+                    self.send_response(HTTPStatus.BAD_REQUEST)
+                    self.end_headers()
+                    return
+
+                raw = self.rfile.read(length)
+                try:
+                    payload = json.loads(raw.decode('utf-8'))
+                    person_id = int(payload.get('person_id', -1))
+                except Exception:
+                    self.send_response(HTTPStatus.BAD_REQUEST)
+                    self.end_headers()
+                    return
+
+                try:
+                    person_select_setter(person_id)
+                except Exception:
+                    self.send_response(HTTPStatus.INTERNAL_SERVER_ERROR)
+                    self.end_headers()
+                    return
+
+                self.send_response(HTTPStatus.NO_CONTENT)
+                self.end_headers()
+                return
+
             if path == '/api/follow':
                 if not callable(follow_setter):
                     self.send_response(HTTPStatus.NOT_IMPLEMENTED)
@@ -5726,6 +5876,7 @@ def main() -> None:
         cmd_vel_stopper=node.stop_cmd_vel,
         tracking_setter=node.set_tracking_enabled,
         tracking_config_setter=node.set_tracking_config,
+        person_select_setter=node.set_person_select,
         follow_setter=node.set_follow_enabled,
         follow_config_setter=node.set_follow_config,
         snapshot_taker=node.take_snapshot,

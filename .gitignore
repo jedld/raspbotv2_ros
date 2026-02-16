@@ -2,4 +2,4 @@
 __pycache__/
 build/
 install/
-log/raspbot_hw/raspbot_hw/__pycache__/
+log/**
