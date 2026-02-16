@@ -284,6 +284,18 @@ public:
             });
         RCLCPP_INFO(get_logger(), "Ultrasonic topic: %s", ultrasonic_topic.c_str());
 
+        // LiDAR front-zone obstacle avoidance (complements ultrasonic)
+        declare_parameter<std::string>("follow_lidar_front_topic", "lidar/front_range");
+        const auto lidar_front_topic = get_parameter("follow_lidar_front_topic").as_string();
+        lidar_front_sub_ = create_subscription<sensor_msgs::msg::Range>(
+            lidar_front_topic, 10,
+            [this](const sensor_msgs::msg::Range::SharedPtr msg) {
+                if (msg && !std::isnan(msg->range) && !std::isinf(msg->range)) {
+                    lidar_front_range_m_.store(msg->range);
+                }
+            });
+        RCLCPP_INFO(get_logger(), "LiDAR front topic (follow): %s", lidar_front_topic.c_str());
+
         // IMU feedback for follow mode (gyro-Z damping + heading hold)
         if (get_parameter("follow_imu_enable").as_bool()) {
             const auto imu_topic = get_parameter("follow_imu_topic").as_string();
@@ -871,8 +883,14 @@ private:
         const Det *best = nullptr;
         for (const auto &d : dets) {
             if (d.score < score_thresh) continue;
-            if (track_id >= 0 && d.class_id != track_id) continue;
-            if (sel_id >= 0 && d.track_id != sel_id) continue;
+            if (sel_id >= 0) {
+                // When a specific person is selected, match by track_id only
+                // (skip class filter — user may have clicked person or face box)
+                if (d.track_id != sel_id) continue;
+            } else {
+                // Auto mode: filter by preferred class (face)
+                if (track_id >= 0 && d.class_id != track_id) continue;
+            }
             if (best == nullptr || d.score > best->score) {
                 best = &d;
             }
@@ -881,8 +899,15 @@ private:
             return;
         }
 
-        const float cx = (best->x1 + best->x2) * 0.5f;
-        const float cy = (best->y1 + best->y2) * 0.5f;
+        // For person-class bboxes, aim at the upper third (head level)
+        // instead of the center (torso level) for better framing.
+        float cx = (best->x1 + best->x2) * 0.5f;
+        float cy;
+        if (best->class_id == 0) {
+            cy = best->y1 + (best->y2 - best->y1) * 0.25f;
+        } else {
+            cy = (best->y1 + best->y2) * 0.5f;
+        }
 
         const float ex = (cx - 0.5f) / 0.5f; // normalized -1..1
         const float ey = (cy - 0.5f) / 0.5f;
@@ -950,8 +975,13 @@ private:
         const Det *best = nullptr;
         for (const auto &d : dets) {
             if (d.score < score_thresh) continue;
-            if (track_id >= 0 && d.class_id != track_id) continue;
-            if (sel_id >= 0 && d.track_id != sel_id) continue;
+            if (sel_id >= 0) {
+                // When a specific person is selected, match by track_id only
+                if (d.track_id != sel_id) continue;
+            } else {
+                // Auto mode: filter by preferred class
+                if (track_id >= 0 && d.class_id != track_id) continue;
+            }
             if (best == nullptr || d.score > best->score) {
                 best = &d;
             }
@@ -1132,22 +1162,25 @@ private:
         cmd_linear  = std::max(-max_lin, std::min(max_lin, cmd_linear));
         cmd_angular = std::max(-max_ang, std::min(max_ang, cmd_angular));
 
-        // ---- Ultrasonic obstacle avoidance (forward motion only) ----
+        // ---- Obstacle avoidance (forward motion only, ultrasonic + LiDAR) ----
         if (cmd_linear > 0.0) {
-            const double range_m = ultrasonic_range_m_.load();
+            const double us_m    = ultrasonic_range_m_.load();
+            const double lidar_m = lidar_front_range_m_.load();
+            const double range_m = std::min(us_m, lidar_m);
             const double stop_m  = get_parameter("follow_obstacle_stop_m").as_double();
             const double slow_m  = get_parameter("follow_obstacle_slow_m").as_double();
 
             if (range_m <= stop_m) {
                 cmd_linear = 0.0;
                 RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
-                    "follow: OBSTACLE at %.2fm – forward motion blocked", range_m);
+                    "follow: OBSTACLE at %.2fm (us=%.2f lidar=%.2f) – blocked",
+                    range_m, us_m, lidar_m);
             } else if (range_m < slow_m && slow_m > stop_m) {
                 const double scale = (range_m - stop_m) / (slow_m - stop_m);
                 cmd_linear *= scale;
                 RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 2000,
-                    "follow: obstacle at %.2fm – speed scaled to %.0f%%",
-                    range_m, scale * 100.0);
+                    "follow: obstacle at %.2fm (us=%.2f lidar=%.2f) – speed %.0f%%",
+                    range_m, us_m, lidar_m, scale * 100.0);
             }
         }
 
@@ -1341,6 +1374,8 @@ private:
     rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr follow_gyro_damping_sub_;
     rclcpp::Subscription<sensor_msgs::msg::Range>::SharedPtr ultrasonic_sub_;
     std::atomic<double> ultrasonic_range_m_{999.0};
+    rclcpp::Subscription<sensor_msgs::msg::Range>::SharedPtr lidar_front_sub_;
+    std::atomic<double> lidar_front_range_m_{999.0};
     rclcpp::TimerBase::SharedPtr follow_safety_timer_;
     std::atomic<bool> follow_enabled_{false};
     std::atomic<double> follow_target_bbox_area_{0.04};

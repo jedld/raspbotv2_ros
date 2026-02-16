@@ -122,6 +122,22 @@ class MotorDriverNode(Node):
         self.declare_parameter('lidar_collision_enable', True)
         self.declare_parameter('lidar_collision_timeout_sec', 1.0)
 
+        # ── Backward collision via LiDAR rear zone ──────────────────
+        # Blocks backward motion when LiDAR rear range is too short.
+        self.declare_parameter('backward_collision_enable', True)
+        self.declare_parameter('backward_stop_distance_m', 0.15)
+        self.declare_parameter('backward_slow_distance_m', 0.30)
+        self.declare_parameter('lidar_rear_range_topic', 'lidar/rear_range')
+
+        # ── Lateral collision via LiDAR side zones ──────────────────
+        # Blocks strafe motion toward an obstacle detected by the LiDAR
+        # left / right zone (mecanum mode only).
+        self.declare_parameter('lateral_collision_enable', True)
+        self.declare_parameter('lateral_stop_distance_m', 0.12)
+        self.declare_parameter('lateral_slow_distance_m', 0.25)
+        self.declare_parameter('lidar_left_range_topic', 'lidar/left_range')
+        self.declare_parameter('lidar_right_range_topic', 'lidar/right_range')
+
         # ── Cliff / edge failsafe (line-tracker) ───────────────────────
         # Uses the downward-facing IR reflectance sensors (line trackers) to
         # detect when the floor disappears (stairs, table edge, hole).
@@ -245,6 +261,29 @@ class MotorDriverNode(Node):
         self._lidar_front_distance = float('inf')
         self._lidar_front_last_time = 0.0
 
+        # ── Backward collision state ──────────────────────────────────
+        self._backward_collision_enable = bool(self.get_parameter('backward_collision_enable').value)
+        self._backward_stop_dist = float(self.get_parameter('backward_stop_distance_m').value)
+        self._backward_slow_dist = float(self.get_parameter('backward_slow_distance_m').value)
+        self._lidar_rear_topic = str(self.get_parameter('lidar_rear_range_topic').value)
+        self._lidar_rear_distance = float('inf')
+        self._lidar_rear_last_time = 0.0
+        self._backward_active = False
+        self._backward_logged = False
+
+        # ── Lateral collision state ───────────────────────────────────
+        self._lateral_collision_enable = bool(self.get_parameter('lateral_collision_enable').value)
+        self._lateral_stop_dist = float(self.get_parameter('lateral_stop_distance_m').value)
+        self._lateral_slow_dist = float(self.get_parameter('lateral_slow_distance_m').value)
+        self._lidar_left_topic = str(self.get_parameter('lidar_left_range_topic').value)
+        self._lidar_right_topic = str(self.get_parameter('lidar_right_range_topic').value)
+        self._lidar_left_distance = float('inf')
+        self._lidar_right_distance = float('inf')
+        self._lidar_left_last_time = 0.0
+        self._lidar_right_last_time = 0.0
+        self._lateral_active = False
+        self._lateral_logged = False
+
         # ── Cliff failsafe state ──────────────────────────────────────
         self._cliff_enable = bool(self.get_parameter('cliff_failsafe_enable').value)
         self._cliff_topic = str(self.get_parameter('cliff_tracking_topic').value)
@@ -311,6 +350,27 @@ class MotorDriverNode(Node):
         if self._lidar_collision_enable:
             self.get_logger().info(
                 f'LiDAR collision integration ENABLED (topic={self._lidar_front_topic})'
+            )
+
+        # ── LiDAR rear/side collision subscriptions ─────────────────
+        self.create_subscription(
+            Range, self._lidar_rear_topic, self._on_lidar_rear_range, 10
+        )
+        self.create_subscription(
+            Range, self._lidar_left_topic, self._on_lidar_left_range, 10
+        )
+        self.create_subscription(
+            Range, self._lidar_right_topic, self._on_lidar_right_range, 10
+        )
+        if self._backward_collision_enable:
+            self.get_logger().info(
+                f'Backward collision ENABLED (stop={self._backward_stop_dist:.2f}m, '
+                f'slow={self._backward_slow_dist:.2f}m, topic={self._lidar_rear_topic})'
+            )
+        if self._lateral_collision_enable:
+            self.get_logger().info(
+                f'Lateral collision ENABLED (stop={self._lateral_stop_dist:.2f}m, '
+                f'slow={self._lateral_slow_dist:.2f}m)'
             )
 
         # ── Cliff failsafe subscription & publisher ───────────────────
@@ -630,6 +690,30 @@ class MotorDriverNode(Node):
             self._lidar_front_distance = max(d, 0.0)
         self._lidar_front_last_time = time.time()
 
+    def _on_lidar_rear_range(self, msg: Range) -> None:
+        d = msg.range
+        if math.isnan(d) or math.isinf(d):
+            self._lidar_rear_distance = float('inf')
+        else:
+            self._lidar_rear_distance = max(d, 0.0)
+        self._lidar_rear_last_time = time.time()
+
+    def _on_lidar_left_range(self, msg: Range) -> None:
+        d = msg.range
+        if math.isnan(d) or math.isinf(d):
+            self._lidar_left_distance = float('inf')
+        else:
+            self._lidar_left_distance = max(d, 0.0)
+        self._lidar_left_last_time = time.time()
+
+    def _on_lidar_right_range(self, msg: Range) -> None:
+        d = msg.range
+        if math.isnan(d) or math.isinf(d):
+            self._lidar_right_distance = float('inf')
+        else:
+            self._lidar_right_distance = max(d, 0.0)
+        self._lidar_right_last_time = time.time()
+
     def _on_collision_enable(self, msg: Bool) -> None:
         """Enable/disable collision failsafe via topic (from web UI)."""
         was = self._collision_enable
@@ -739,6 +823,110 @@ class MotorDriverNode(Node):
             elif self._collision_logged:
                 self._collision_logged = False
             return vx
+
+    # ── Backward collision failsafe (LiDAR rear zone) ────────────────
+
+    def _apply_backward_failsafe(self, vx: float) -> float:
+        """Clamp backward velocity based on LiDAR rear range.
+
+        Only restricts backward motion (vx < 0).
+        """
+        if not self._backward_collision_enable or vx >= 0.0:
+            if self._backward_active:
+                self._backward_active = False
+                self._backward_logged = False
+            return vx
+
+        # Stale data — don't block
+        if (time.time() - self._lidar_rear_last_time) > self._lidar_collision_timeout:
+            if self._backward_active:
+                self._backward_active = False
+                self._backward_logged = False
+            return vx
+
+        dist = self._lidar_rear_distance
+        stop_d = self._backward_stop_dist
+        slow_d = self._backward_slow_dist
+
+        if dist <= stop_d:
+            if not self._backward_logged:
+                self.get_logger().warn(
+                    f'[backward-failsafe] STOP — rear obstacle at {dist:.2f}m'
+                )
+                self._backward_logged = True
+            self._backward_active = True
+            return 0.0
+        elif dist < slow_d:
+            scale = (dist - stop_d) / (slow_d - stop_d)
+            self._backward_active = True
+            if not self._backward_logged:
+                self.get_logger().info(
+                    f'[backward-failsafe] slowing — rear obstacle at {dist:.2f}m '
+                    f'(scale {scale:.0%})'
+                )
+                self._backward_logged = True
+            return vx * scale  # vx is negative, so this slows the backward speed
+        else:
+            if self._backward_active:
+                self._backward_active = False
+                self._backward_logged = False
+                self.get_logger().info('[backward-failsafe] clear')
+            return vx
+
+    # ── Lateral collision failsafe (LiDAR left/right zones) ──────────
+
+    def _apply_lateral_failsafe(self, vy: float) -> float:
+        """Clamp lateral (strafe) velocity based on LiDAR side ranges.
+
+        vy > 0 → moving left (check left range),
+        vy < 0 → moving right (check right range).
+        """
+        if not self._lateral_collision_enable or abs(vy) < 1e-4:
+            if self._lateral_active:
+                self._lateral_active = False
+                self._lateral_logged = False
+            return vy
+
+        if vy > 0.0:
+            # Strafing left — check left range
+            if (time.time() - self._lidar_left_last_time) > self._lidar_collision_timeout:
+                return vy
+            dist = self._lidar_left_distance
+        else:
+            # Strafing right — check right range
+            if (time.time() - self._lidar_right_last_time) > self._lidar_collision_timeout:
+                return vy
+            dist = self._lidar_right_distance
+
+        stop_d = self._lateral_stop_dist
+        slow_d = self._lateral_slow_dist
+
+        if dist <= stop_d:
+            if not self._lateral_logged:
+                side = 'left' if vy > 0 else 'right'
+                self.get_logger().warn(
+                    f'[lateral-failsafe] STOP — {side} obstacle at {dist:.2f}m'
+                )
+                self._lateral_logged = True
+            self._lateral_active = True
+            return 0.0
+        elif dist < slow_d:
+            scale = (dist - stop_d) / (slow_d - stop_d)
+            self._lateral_active = True
+            if not self._lateral_logged:
+                side = 'left' if vy > 0 else 'right'
+                self.get_logger().info(
+                    f'[lateral-failsafe] slowing — {side} obstacle at {dist:.2f}m '
+                    f'(scale {scale:.0%})'
+                )
+                self._lateral_logged = True
+            return vy * scale
+        else:
+            if self._lateral_active:
+                self._lateral_active = False
+                self._lateral_logged = False
+                self.get_logger().info('[lateral-failsafe] clear')
+            return vy
 
     # ── Cliff / edge failsafe (line-tracker sensors) ─────────────────
 
@@ -880,8 +1068,14 @@ class MotorDriverNode(Node):
         # ── Apply collision failsafe before kinematics ────────────────
         vx = self._apply_collision_failsafe(vx)
 
+        # ── Apply backward collision failsafe (LiDAR rear) ───────────
+        vx = self._apply_backward_failsafe(vx)
+
         # ── Apply cliff failsafe (line-tracker edge detection) ────────
         vx = self._apply_cliff_failsafe(vx)
+
+        # ── Apply lateral collision failsafe (LiDAR left/right) ──────
+        vy = self._apply_lateral_failsafe(vy)
 
         if self._max_linear <= 0.0:
             self._left_pwm = 0.0

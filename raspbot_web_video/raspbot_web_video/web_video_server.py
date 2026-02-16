@@ -690,9 +690,13 @@ INDEX_HTML = """<!doctype html>
             const sx = overlay.width / Number(j.image_width);
             const sy = overlay.height / Number(j.image_height);
 
-            // Find the smallest detection (most specific) containing the click.
+            // Prefer person-class (class_id=0) detections for selection
+            // because person bboxes have the most stable track IDs.
+            // Fall back to any detection class if no person box matches.
             let bestDet = null;
             let bestArea = Infinity;
+            let fallbackDet = null;
+            let fallbackArea = Infinity;
             for (const d of j.detections) {
                 const x = Number(d.x) * sx;
                 const y = Number(d.y) * sy;
@@ -701,12 +705,18 @@ INDEX_HTML = """<!doctype html>
                 if (!Number.isFinite(x + y + w + h)) continue;
                 if (clickX >= x && clickX <= x + w && clickY >= y && clickY <= y + h) {
                     const area = w * h;
-                    if (area < bestArea && typeof d.track_id === 'number' && d.track_id >= 0) {
-                        bestArea = area;
-                        bestDet = d;
+                    if (typeof d.track_id === 'number' && d.track_id >= 0) {
+                        if (d.class_id === 0 && area < bestArea) {
+                            bestArea = area;
+                            bestDet = d;
+                        } else if (area < fallbackArea) {
+                            fallbackArea = area;
+                            fallbackDet = d;
+                        }
                     }
                 }
             }
+            if (!bestDet) bestDet = fallbackDet;
 
             if (bestDet) {
                 selectPerson(bestDet.track_id);

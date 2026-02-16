@@ -263,6 +263,13 @@ class OdometryNode(Node):
         # Path: multi-waypoint route
         self.create_subscription(Path, 'odom/navigate_path', self._on_navigate_path, 10)
 
+        # Collision failsafe awareness — pause navigation when obstacle detected
+        self._collision_blocked = False
+        self._collision_pause_logged = False
+        self.create_subscription(
+            Bool, 'collision_failsafe/active', self._on_collision_active, 10
+        )
+
         # ── Services ─────────────────────────────────────────────────
         self.create_service(Trigger, 'odom/set_origin', self._srv_set_origin)
         self.create_service(Trigger, 'odom/start_recording', self._srv_start_recording)
@@ -635,6 +642,18 @@ class OdometryNode(Node):
             self._finish_navigate('timeout')
             return
 
+        # Pause while collision failsafe is active (obstacle ahead)
+        if self._collision_blocked:
+            if not self._collision_pause_logged:
+                self.get_logger().info('[odom] navigate paused — collision failsafe active')
+                self._collision_pause_logged = True
+            # Send zero velocity while paused
+            self._return_cmd_pub.publish(Twist())
+            return
+        elif self._collision_pause_logged:
+            self.get_logger().info('[odom] navigate resumed — collision clear')
+            self._collision_pause_logged = False
+
         if self._nav_wp_idx >= len(self._nav_waypoints):
             self._finish_navigate('arrived')
             return
@@ -681,9 +700,14 @@ class OdometryNode(Node):
 
     def _finish_navigate(self, reason: str) -> None:
         self._navigating = False
+        self._collision_pause_logged = False
         self._return_cmd_pub.publish(Twist())
         self.get_logger().info(f'[odom] navigate-to-waypoint finished: {reason}')
         self._publish_nav_status(f'nav: {reason}')
+
+    def _on_collision_active(self, msg: Bool) -> None:
+        """Receive collision failsafe state from motor_driver."""
+        self._collision_blocked = msg.data
 
     def _publish_nav_status(self, text: str) -> None:
         msg = String()

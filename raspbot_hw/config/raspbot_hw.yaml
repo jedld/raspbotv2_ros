@@ -93,7 +93,7 @@ motor_driver:
 
     # ── Collision failsafe (ultrasonic) ──────────────────────────────
     # Blocks forward motion when the ultrasonic sensor detects an obstacle.
-    # Enabled by default.  Does NOT affect backward, strafe, or rotation.
+    # Enabled by default.
     collision_failsafe_enable: true
     collision_stop_distance_m: 0.15    # hard stop (no forward motion)
     collision_slow_distance_m: 0.35    # begin linear slow-down
@@ -107,6 +107,21 @@ motor_driver:
     lidar_front_range_topic: "lidar/front_range"
     lidar_collision_enable: true
     lidar_collision_timeout_sec: 1.0
+
+    # ── Backward collision (LiDAR rear zone) ─────────────────────────
+    # Blocks backward motion when the LiDAR rear zone detects an obstacle.
+    backward_collision_enable: true
+    backward_stop_distance_m: 0.15     # hard stop
+    backward_slow_distance_m: 0.30     # begin linear slow-down
+    lidar_rear_range_topic: "lidar/rear_range"
+
+    # ── Lateral collision (LiDAR side zones) ─────────────────────────
+    # Blocks strafe motion toward an obstacle (mecanum mode).
+    lateral_collision_enable: true
+    lateral_stop_distance_m: 0.12      # hard stop
+    lateral_slow_distance_m: 0.25      # begin linear slow-down
+    lidar_left_range_topic: "lidar/left_range"
+    lidar_right_range_topic: "lidar/right_range"
 
     # ── Cliff failsafe (line-tracker IR sensors) ─────────────────────
     # Blocks forward motion when any line-tracker sensor detects "no floor"
