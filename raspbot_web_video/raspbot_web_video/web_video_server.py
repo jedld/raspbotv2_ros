@@ -20,7 +20,7 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from geometry_msgs.msg import Vector3, Twist
 from nav_msgs.msg import Odometry, OccupancyGrid, Path
-from sensor_msgs.msg import CompressedImage, Imu, LaserScan, Range
+from sensor_msgs.msg import BatteryState, CompressedImage, Imu, LaserScan, Range
 from std_msgs.msg import Bool, Empty, Float32, Float64, Int32, Int32MultiArray, String, UInt8MultiArray
 from std_srvs.srv import Trigger
 import os
@@ -142,6 +142,12 @@ class FrameBuffer:
             return self._latest
 
     def wait_for_newer(self, last_stamp: float, timeout: float) -> LatestFrame:
+        # If last_stamp is 0, the client just connected. Return whatever we have immediately.
+        # This fixes LCP/start-up delay.
+        if last_stamp == 0.0:
+            with self._cv:
+                return self._latest
+
         end = time.monotonic() + max(timeout, 0.0)
         with self._cv:
             while self._latest.stamp_monotonic <= last_stamp:
@@ -196,8 +202,8 @@ class WebVideoNode(Node):
         self.declare_parameter("front_camera_topic", "front_camera/compressed")
         self.declare_parameter("bind", "0.0.0.0")
         self.declare_parameter("port", 8080)
-        self.declare_parameter("fps_limit", 15.0)
-        self.declare_parameter("depth_fps_limit", 8.0)
+        self.declare_parameter("fps_limit", 6.0)
+        self.declare_parameter("depth_fps_limit", 4.0)
         self.declare_parameter("http_backlog", 64)
 
         self.declare_parameter("gimbal_topic", "camera_gimbal/command_deg")
@@ -476,6 +482,20 @@ class WebVideoNode(Node):
 
         self._depth_enable_pub = self.create_publisher(Bool, depth_enable_topic, 10)
         self.get_logger().info(f"Depth enable topic: {depth_enable_topic}")
+
+        # ── Battery monitor integration ───────────────────────────────
+        self.declare_parameter("battery_state_topic", "battery/state")
+        battery_topic = str(self.get_parameter("battery_state_topic").value)
+
+        self._battery_voltage = 0.0
+        self._battery_percentage = 0.0  # 0–100
+        self._battery_present = False
+        self._battery_last_monotonic = 0.0
+
+        self._battery_sub = self.create_subscription(
+            BatteryState, battery_topic, self._on_battery_state, 10
+        )
+        self.get_logger().info(f"Battery state topic: {battery_topic}")
 
         # ── Collision failsafe integration ────────────────────────────
         self.declare_parameter("collision_failsafe_enable_topic", "collision_failsafe/enable")
@@ -839,6 +859,15 @@ class WebVideoNode(Node):
                 'stuck': bool(self._odom_stuck),
                 'navigating': bool(self._odom_navigating),
             },
+            'battery': {
+                'present': bool(self._battery_present),
+                'voltage': round(float(self._battery_voltage), 3),
+                'percentage': round(float(self._battery_percentage), 1),
+                'last_update_age_s': (
+                    round(max(0.0, now - self._battery_last_monotonic), 1)
+                    if self._battery_last_monotonic > 0.0 else None
+                ),
+            },
         }
 
     def _on_detections(self, msg: String) -> None:
@@ -868,6 +897,15 @@ class WebVideoNode(Node):
             return json.loads(self._latest_detections_json)
         except Exception:
             return {"error": "invalid_detections_json", "detections": []}
+
+    def get_latest_detections_json(self) -> str:
+        """Return raw JSON string for detections to avoid repetitive parsing/serialization."""
+        now = time.monotonic()
+        if self._face_detections_json and (now - self._face_det_monotonic) < 2.0:
+            return self._face_detections_json
+        if self._latest_detections_json:
+            return self._latest_detections_json
+        return '{"image_width": null, "image_height": null, "detections": []}'
 
     # ------------------------------------------------------------------
     # Face DB management (delegated to FaceDB instance)
@@ -1060,6 +1098,12 @@ class WebVideoNode(Node):
 
     def _on_imu_mic(self, msg: Int32) -> None:
         self._imu_mic_level = msg.data
+
+    def _on_battery_state(self, msg: BatteryState) -> None:
+        self._battery_voltage = msg.voltage
+        self._battery_percentage = msg.percentage * 100.0  # BatteryState uses 0.0–1.0
+        self._battery_present = msg.present
+        self._battery_last_monotonic = time.monotonic()
 
     def _on_bno_cal(self, msg: String) -> None:
         """Receive BNO055 calibration JSON from imu/calibration."""
@@ -1544,9 +1588,13 @@ class WebVideoNode(Node):
 
     def _on_scan(self, msg: LaserScan) -> None:
         n = len(msg.ranges)
-        angles = [msg.angle_min + i * msg.angle_increment for i in range(n)]
-        self._scan_angles = angles
-        self._scan_ranges = list(msg.ranges)
+        # Vectorize angle generation
+        self._scan_angles = np.linspace(msg.angle_min, msg.angle_max, n)
+        # Store ranges as numpy array, handling infinities if needed (though JS handles null/inf often)
+        # but for safety, let's keep them as is, just numpy-ified.
+        # Note: msg.ranges is a tuple/array.array usually.
+        self._scan_ranges = np.array(msg.ranges, dtype=np.float32)
+
         self._scan_angle_min = msg.angle_min
         self._scan_angle_max = msg.angle_max
         self._scan_range_min = msg.range_min
@@ -1558,9 +1606,26 @@ class WebVideoNode(Node):
         age = None
         if self._scan_last_monotonic > 0.0:
             age = round(max(0.0, now - self._scan_last_monotonic), 3)
-        # Round values to reduce JSON payload size (~430 points per scan)
-        angles = [round(a, 4) for a in self._scan_angles]
-        ranges = [round(r, 4) for r in self._scan_ranges]
+
+        # Optimize: Use numpy for fast rounding if available, else fallback
+        # (Though we expect numpy to be available in this environment)
+        if self._scan_ranges is not None and len(self._scan_ranges) > 0:
+            # Check if it's already a numpy array (from _on_scan optimization)
+            if isinstance(self._scan_ranges, np.ndarray):
+                ranges = np.round(self._scan_ranges, 4).tolist()
+            else:
+                 ranges = [round(r, 4) for r in self._scan_ranges]
+        else:
+             ranges = []
+
+        if self._scan_angles is not None and len(self._scan_angles) > 0:
+             if isinstance(self._scan_angles, np.ndarray):
+                 angles = np.round(self._scan_angles, 4).tolist()
+             else:
+                 angles = [round(a, 4) for a in self._scan_angles]
+        else:
+             angles = []
+
         return {
             'angles': angles,
             'ranges': ranges,
@@ -1575,7 +1640,8 @@ class WebVideoNode(Node):
 
     def _on_map(self, msg: OccupancyGrid) -> None:
         """Store latest occupancy grid for /api/map endpoint."""
-        self._map_data = list(msg.data)
+        # Store as numpy array immediately for efficiency
+        self._map_data = np.array(msg.data, dtype=np.int8)
         self._map_width = msg.info.width
         self._map_height = msg.info.height
         self._map_resolution = msg.info.resolution
@@ -1587,15 +1653,75 @@ class WebVideoNode(Node):
     def get_map_dict(self) -> dict:
         """Build map data dict for /api/map endpoint."""
         now = time.monotonic()
-        if not self._map_data or self._map_last_monotonic == 0.0:
+        if self._map_data is None or self._map_last_monotonic == 0.0:
             return {'available': False}
 
         # Only re-encode when map data changes
         if self._map_dirty:
             import base64
-            data_bytes = bytes(
-                255 if v < 0 else min(v, 100) for v in self._map_data
-            )
+            # Vectorized implementation using numpy
+            # Map data is int8 (-1..100).
+            # Logic: 255 if v < 0 else min(v, 100)
+            
+            # Ensure it is a numpy array (it should be from _on_map)
+            arr = self._map_data
+            if not isinstance(arr, np.ndarray):
+                arr = np.array(arr, dtype=np.int8)
+            
+            # Mask for unknown (-1) -> 255 (uint8)
+            # We can use a temporary buffer or create a new one.
+            # Output needs to be uint8 for base64
+            
+            # 1. Create output array initialized to same values
+            # Cast to int16 temporarily to avoid overflow if needed, or just smart masking
+            # Actually, standard map is -1 (unknown), 0-100 (prob).
+            # We want -1 -> 255. 0-100 -> 0-100.
+            
+            # Use np.where is robust.
+            # unknown_mask = (arr < 0)
+            # occupied_mask = (arr > 100) # Should not happen in standard map, but clean it.
+            
+            # Create a clean uint8 array
+            # -1 becomes 255 when cast to uint8? No, -1 is 255 in int8 two's complement, 
+            # but we need to be careful.
+            # Let's use explicit logic for clarity and speed.
+            
+            processed = np.copy(arr)
+            
+            # Clamp 0..100
+            # Note: -1 is < 0, so it's not affected by min(100) if we did that.
+            # But we want -1 -> 255.
+            
+            # Fast way:
+            # 1. replace -1 with 255? 
+            # In int8, -1 is signed. 255 is not representable.
+            # So we must cast to uint8 first? 
+            # If we cast -1 (int8) to uint8, it becomes 255!
+            # If we cast 100 (int8) to uint8, it becomes 100.
+            # So simple cast might work for -1 case!
+            
+            # However, we also want `min(v, 100)`.
+            # If v is 120 (invalid prob), it should be 100.
+            
+            # Safer approach:
+            out = np.zeros_like(arr, dtype=np.uint8)
+            
+            # Copy valid data: 0 <= v <= 100
+            valid_mask = (arr >= 0) & (arr <= 100)
+            out[valid_mask] = arr[valid_mask]
+            
+            # Handle > 100 (clamp to 100)
+            high_mask = (arr > 100)
+            out[high_mask] = 100
+            
+            # Handle < 0 (unknown) -> 255
+            # Already zeros? No, we need 255.
+            unknown_mask = (arr < 0)
+            out[unknown_mask] = 255
+            
+            # Convert to bytes
+            data_bytes = out.tobytes()
+            
             self._map_b64_cache = base64.b64encode(data_bytes).decode('ascii')
             self._map_dirty = False
 
@@ -1821,6 +1947,7 @@ def make_handler(
     logger,
     status_provider=None,
     detections_provider=None,
+    detections_json_provider=None,
     gimbal_setter=None,
     gimbal_center=None,
     cmd_vel_setter=None,
@@ -1903,10 +2030,32 @@ def make_handler(
         except Exception:
             return None
 
+    # ── Shared low-res frame cache (avoids per-client decode+resize+encode) ──
+    # Key: (source_id, w, h, q)  Value: (source_stamp, jpeg_bytes)
+    _lo_cache: dict = {}
+    _lo_cache_lock = threading.Lock()
+
+    def _get_cached_lo(source_id: str, source_stamp: float,
+                       jpeg_bytes: bytes, w: int, h: int, q: int) -> bytes:
+        """Return cached low-res JPEG, resizing only on first access per source frame."""
+        key = (source_id, w, h, q)
+        with _lo_cache_lock:
+            cached = _lo_cache.get(key)
+            if cached is not None and cached[0] == source_stamp:
+                return cached[1]
+        # Resize outside the lock to avoid blocking other threads
+        resized = _resize_jpeg(jpeg_bytes, w, h, q)
+        if resized is None:
+            resized = jpeg_bytes  # fallback: send original
+        with _lo_cache_lock:
+            _lo_cache[key] = (source_stamp, resized)
+        return resized
+
     class Handler(BaseHTTPRequestHandler):
         # Use a large write buffer so each flush() sends one TCP segment
         # per frame instead of 3-4 small send() syscalls that thrash the GIL.
-        wbufsize = 65536
+        # wbufsize = 65536  # DISABLED for debugging
+
 
         def setup(self):
             super().setup()
@@ -2043,40 +2192,54 @@ def make_handler(
 
                         if now >= next_due[0]:
                             next_due[0] = now + FAST_IV
-                            if callable(detections_provider):
+                            # 1. Detections: Send as raw JSON string if possible
+                            if callable(detections_json_provider):
                                 try:
-                                    payload["detections"] = detections_provider()
+                                    # The provider returns a JSON string, e.g. '{"detections": [...], ...}'
+                                    # We can send it directly.
+                                    det_json = detections_json_provider()
+                                    if det_json:
+                                        _ws_send(sock, det_json.encode('utf-8'), 0x01)
                                 except Exception:
                                     pass
+                            
+                            # 2. IMU: Send separately
                             if callable(imu_provider):
                                 try:
-                                    payload["imu"] = imu_provider()
+                                    imu_data = imu_provider()
+                                    if imu_data:
+                                        _ws_send(sock, json.dumps({"imu": imu_data}).encode('utf-8'), 0x01)
                                 except Exception:
                                     pass
 
                         if now >= next_due[1]:
                             next_due[1] = now + SENSORS_IV
+                            sensors_payload = {}
                             if callable(odom_provider):
                                 try:
-                                    payload["odom"] = odom_provider()
+                                    sensors_payload["odom"] = odom_provider()
                                 except Exception:
                                     pass
                             if callable(scan_provider):
                                 try:
-                                    payload["lidar"] = scan_provider()
+                                    sensors_payload["lidar"] = scan_provider()
                                 except Exception:
                                     pass
                             if callable(lidar_zones_provider):
                                 try:
-                                    payload["lidar_zones"] = lidar_zones_provider()
+                                    sensors_payload["lidar_zones"] = lidar_zones_provider()
                                 except Exception:
                                     pass
+                            
+                            if sensors_payload:
+                                _ws_send(sock, json.dumps(sensors_payload).encode('utf-8'), 0x01)
 
                         if now >= next_due[2]:
                             next_due[2] = now + STATUS_IV
                             if callable(status_provider):
                                 try:
-                                    payload["status"] = status_provider()
+                                    status_data = status_provider()
+                                    _ws_send(sock, json.dumps({"status": status_data}).encode('utf-8'), 0x01)
                                 except Exception:
                                     pass
 
@@ -2084,7 +2247,11 @@ def make_handler(
                             next_due[3] = now + MAP_IV
                             if callable(map_provider):
                                 try:
-                                    payload["map"] = map_provider()
+                                    map_data = map_provider()
+                                    # Map data can be large! But it's base64 string inside the dict.
+                                    # Still effective to send it alone.
+                                    if map_data:
+                                        _ws_send(sock, json.dumps({"map": map_data}).encode('utf-8'), 0x01)
                                 except Exception:
                                     pass
 
@@ -2092,13 +2259,9 @@ def make_handler(
                             next_due[4] = now + FACES_IV
                             if callable(face_list):
                                 try:
-                                    payload["faces"] = {"faces": face_list()}
+                                    _ws_send(sock, json.dumps({"faces": face_list()}).encode('utf-8'), 0x01)
                                 except Exception:
                                     pass
-
-                        if payload:
-                            data = json.dumps(payload).encode("utf-8")
-                            _ws_send(sock, data, 0x01)
 
                         # Drain incoming frames (close / ping / pong)
                         sock.settimeout(0.05)
@@ -2161,13 +2324,20 @@ def make_handler(
                 return
 
             if path.startswith("/detections"):
-                payload = {"detections": []}
-                if callable(detections_provider):
+                if callable(detections_json_provider):
                     try:
-                        payload = detections_provider()
+                        body = (detections_json_provider() + "\n").encode("utf-8")
                     except Exception:
-                        payload = {'error': 'detections_provider_failed', 'detections': []}
-                body = (json.dumps(payload) + "\n").encode("utf-8")
+                        body = b'{"detections": []}\n'
+                else:
+                    payload = {"detections": []}
+                    if callable(detections_provider):
+                        try:
+                            payload = detections_provider()
+                        except Exception:
+                            payload = {'error': 'detections_provider_failed', 'detections': []}
+                    body = (json.dumps(payload) + "\n").encode("utf-8")
+                
                 self.send_response(HTTPStatus.OK)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
@@ -2306,19 +2476,43 @@ def make_handler(
                 return
 
             # ── Combined endpoint: /api/fast (detections + imu) ──────
+            # ── Combined endpoint: /api/fast (detections + imu) ──────
             if path == "/api/fast":
-                payload = {}
-                if callable(detections_provider):
-                    try:
-                        payload['detections'] = detections_provider()
-                    except Exception:
-                        payload['detections'] = {'error': 'failed', 'detections': []}
+                # Manual string concatenation for speed
+                det_part = '{"detections": []}'
+                if callable(detections_json_provider):
+                     det_part = detections_json_provider()
+                elif callable(detections_provider):
+                     try:
+                         det_part = json.dumps(detections_provider())
+                     except Exception:
+                         pass
+                
+                imu_part = '"imu": {}'
                 if callable(imu_provider):
                     try:
-                        payload['imu'] = imu_provider()
+                        imu_part = '"imu": ' + json.dumps(imu_provider())
                     except Exception:
-                        payload['imu'] = {'error': 'failed'}
-                body = (json.dumps(payload) + "\n").encode("utf-8")
+                        pass
+                
+                # Construct { "detections": ..., "imu": ... }
+                # But det_part is {"detections": [...], ...} (entire object).
+                # Wait, if det_part is the WHOLE json object `{"detections": ...}`, we can't just concat it easily into another dict/json?
+                # The raw 'detections/json' topic returns the full object.
+                # If we want to return `{"detections": ..., "imu": ...}`, we need to merge them.
+                # Merging raw JSON strings is tricky without parsing.
+                # structure: det_part = `{"detections": [...]}`
+                # We want: `{"detections": [...], "imu": {...}}`
+                # Heuristic: strip the trailing '}' from det_part, append `, "imu": ... }`.
+                # This depends on det_part being well-formed and ending with '}'.
+                det_str = det_part.strip()
+                if det_str.endswith('}'):
+                    combined = det_str[:-1] + ', ' + imu_part + '}'
+                else:
+                    # Fallback to just wrapping detections if malformed, or empty
+                    combined = '{"detections": [], ' + imu_part + '}'
+
+                body = (combined + "\n").encode("utf-8")
                 self.send_response(HTTPStatus.OK)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
@@ -2405,6 +2599,19 @@ def make_handler(
                 except Exception:
                     pass
 
+                # Parse query parameters: w, h, q
+                qs = parse_qs(parsed.query)
+                do_resize = 'w' in qs or 'h' in qs or 'q' in qs
+                if do_resize and _cv2 is not None:
+                    lo_w = int(qs.get("w", ["640"])[0])
+                    lo_h = int(qs.get("h", ["480"])[0])
+                    lo_q = int(qs.get("q", ["30"])[0])
+                    lo_w = max(80, min(lo_w, 1280))
+                    lo_h = max(60, min(lo_h, 720))
+                    lo_q = max(5, min(lo_q, 95))
+                else:
+                    do_resize = False
+
                 try:
                     while True:
                         # Throttle server-side to avoid pegging CPU/network.
@@ -2415,12 +2622,20 @@ def make_handler(
 
                         frame = frame_buffer.wait_for_newer(last_stamp, timeout=1.0)
                         if frame.jpeg is None:
+                            # if logger: logger.debug("Stream wait_for_newer timeout/empty")
                             continue
+
 
                         last_stamp = frame.stamp_monotonic
                         last_sent_time = time.monotonic()
 
-                        jpeg = frame.jpeg
+                        if do_resize:
+                             jpeg = _get_cached_lo(
+                                "gimbal", frame.stamp_monotonic,
+                                frame.jpeg, lo_w, lo_h, lo_q)
+                        else:
+                             jpeg = frame.jpeg
+
                         # Single write per frame: boundary + headers + jpeg + CRLF
                         self.wfile.write(
                             boundary + b"\r\n"
@@ -2435,6 +2650,10 @@ def make_handler(
                     if logger is not None:
                         logger.warn(f"stream client error: {e!r}")
                     return
+                finally:
+                    if logger is not None:
+                         logger.info("Stream client disconnected")
+
 
             if path.startswith("/stream_front.mjpg"):
                 if front_frame_buffer is None:
@@ -2600,10 +2819,9 @@ def make_handler(
                         last_stamp = frame.stamp_monotonic
                         last_sent_time = time.monotonic()
 
-                        resized = _resize_jpeg(frame.jpeg, lo_w, lo_h, lo_q)
-                        if resized is None:
-                            # Fallback: send original frame
-                            resized = frame.jpeg
+                        resized = _get_cached_lo(
+                            cam_label, frame.stamp_monotonic,
+                            frame.jpeg, lo_w, lo_h, lo_q)
 
                         self.wfile.write(
                             boundary + b"\r\n"
@@ -3446,6 +3664,7 @@ def main() -> None:
         logger=node.get_logger(),
         status_provider=node.status_dict,
         detections_provider=node.get_latest_detections,
+        detections_json_provider=node.get_latest_detections_json,
         gimbal_setter=node.set_gimbal,
         gimbal_center=node.center_gimbal,
         cmd_vel_setter=node.set_cmd_vel,

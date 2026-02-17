@@ -36,6 +36,7 @@ setup(
             'lidar_slam = raspbot_hw.lidar_slam_node:main',
             'lidar_obstacle = raspbot_hw.lidar_obstacle_node:main',
             'front_calibration = raspbot_hw.front_calibration_node:main',
+            'battery_monitor = raspbot_hw.battery_monitor_node:main',
         ],
     },
 )

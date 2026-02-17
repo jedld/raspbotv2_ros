@@ -38,6 +38,7 @@ def generate_launch_description():
     enable_slam = LaunchConfiguration('enable_slam')
     enable_lidar_obstacle = LaunchConfiguration('enable_lidar_obstacle')
     enable_calibration = LaunchConfiguration('enable_calibration')
+    enable_battery_monitor = LaunchConfiguration('enable_battery_monitor')
     params_file = LaunchConfiguration('params_file')
 
     default_params_file = PathJoinSubstitution([
@@ -95,6 +96,7 @@ def generate_launch_description():
         DeclareLaunchArgument('enable_slam', default_value='true'),
         DeclareLaunchArgument('enable_lidar_obstacle', default_value='true'),
         DeclareLaunchArgument('enable_calibration', default_value='true'),
+        DeclareLaunchArgument('enable_battery_monitor', default_value='true'),
         DeclareLaunchArgument('params_file', default_value=default_params_file),
 
         IncludeLaunchDescription(
@@ -113,6 +115,7 @@ def generate_launch_description():
                 'enable_slam': enable_slam,
                 'enable_lidar_obstacle': enable_lidar_obstacle,
                 'enable_calibration': enable_calibration,
+                'enable_battery_monitor': enable_battery_monitor,
                 'params_file': params_file,
             }.items(),
         ),

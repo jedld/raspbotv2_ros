@@ -109,77 +109,93 @@ class PiCameraNode(Node):
     def _try_gstreamer(self) -> bool:
         """Try OpenCV capture via GStreamer libcamerasrc pipeline.
 
+        Pipeline priority (best performance first):
+          1. JPEG pipeline — libcamerasrc → jpegenc → appsink
+             Encodes JPEG entirely in GStreamer (C/libjpeg-turbo).
+             No BGR conversion, no Python imencode. ~3x faster.
+          2. BGR pipeline — libcamerasrc → videoconvert(BGR) → appsink
+             Falls back to Python cv2.imencode for JPEG.
+
         On Pi 5 with PiSP, libcamerasrc auto-negotiates the sensor
-        format internally.  We let it choose the best raw mode, then
-        use videoconvert + videoscale to deliver the requested BGR
-        resolution to the OpenCV appsink.
+        format internally.
         """
         try:
             cv2 = self._cv2
 
-            # Discover the IMX708 camera-name from /dev/media*
             camera_name = self._discover_libcamera_name()
+            af_props = self._build_af_properties()
+            fps_int = max(1, int(self._fps))
+            q = max(1, min(100, int(self._jpeg_quality)))
+
+            cam_prefix = (
+                f'libcamerasrc camera-name="{camera_name}"{af_props}'
+                if camera_name
+                else f'libcamerasrc{af_props}'
+            )
 
             pipelines_to_try = []
 
-            # Build autofocus properties for libcamerasrc.
-            # Newer GStreamer libcamera plugins expose af-mode, af-range,
-            # af-speed as direct element properties (not extra-controls).
-            af_props = self._build_af_properties()
+            # ── JPEG pipelines (preferred — no BGR, no Python imencode) ──
+            # videoconvert to I420 is cheap (native to jpegenc) and avoids
+            # the expensive BGR colour-space conversion.
+            pipelines_to_try.append((
+                f'{cam_prefix} ! '
+                f'videorate max-rate={fps_int} drop-only=true ! '
+                f'videoconvert ! videoscale ! '
+                f'video/x-raw,format=I420,width={self._width},'
+                f'height={self._height} ! '
+                f'jpegenc quality={q} ! '
+                f'appsink drop=true sync=false max-buffers=2',
+                True  # is_jpeg
+            ))
 
-            fps_int = max(1, int(self._fps))
+            # JPEG pipeline without videorate (broader compat)
+            pipelines_to_try.append((
+                f'{cam_prefix} ! '
+                f'videoconvert ! videoscale ! '
+                f'video/x-raw,format=I420,width={self._width},'
+                f'height={self._height} ! '
+                f'jpegenc quality={q} ! '
+                f'appsink drop=true sync=false max-buffers=2',
+                True
+            ))
 
-            # Pipelines use videorate max-rate BEFORE videoconvert to
-            # drop excess frames from libcamerasrc before the expensive
-            # color space conversion. This is the key CPU savings.
-            # Pipeline 1: explicit camera-name with rate limit
-            if camera_name:
-                pipelines_to_try.append(
-                    f'libcamerasrc camera-name="{camera_name}"{af_props} ! '
-                    f'videorate max-rate={fps_int} drop-only=true ! '
-                    f'videoconvert ! videoscale ! '
-                    f'video/x-raw,format=BGR,width={self._width},'
-                    f'height={self._height} ! '
-                    f'appsink drop=true sync=false'
-                )
-
-            # Pipeline 2: generic libcamerasrc with rate limit
-            pipelines_to_try.append(
-                f'libcamerasrc{af_props} ! '
+            # ── BGR fallback pipelines (use Python imencode) ──────────
+            pipelines_to_try.append((
+                f'{cam_prefix} ! '
                 f'videorate max-rate={fps_int} drop-only=true ! '
                 f'videoconvert ! videoscale ! '
                 f'video/x-raw,format=BGR,width={self._width},'
                 f'height={self._height} ! '
-                f'appsink drop=true sync=false'
-            )
-
-            # Pipeline 3: fallback without videorate (original)
-            if camera_name:
-                pipelines_to_try.append(
-                    f'libcamerasrc camera-name="{camera_name}"{af_props} ! '
-                    f'videoconvert ! videoscale ! '
-                    f'video/x-raw,format=BGR,width={self._width},'
-                    f'height={self._height} ! '
-                    f'appsink drop=true sync=false'
-                )
-            pipelines_to_try.append(
-                f'libcamerasrc{af_props} ! '
+                f'appsink drop=true sync=false',
+                False
+            ))
+            pipelines_to_try.append((
+                f'{cam_prefix} ! '
                 f'videoconvert ! videoscale ! '
                 f'video/x-raw,format=BGR,width={self._width},'
                 f'height={self._height} ! '
-                f'appsink drop=true sync=false'
-            )
+                f'appsink drop=true sync=false',
+                False
+            ))
 
-            for pipeline in pipelines_to_try:
+            for pipeline, is_jpeg in pipelines_to_try:
                 self.get_logger().info(
-                    f'Pi Camera: trying GStreamer pipeline: {pipeline}'
+                    f'Pi Camera: trying GStreamer pipeline '
+                    f'(jpeg={is_jpeg}): {pipeline}'
                 )
                 cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
                 if cap.isOpened():
-                    ok, _ = cap.read()
-                    if ok:
+                    if is_jpeg:
+                        # Disable OpenCV auto-decode so we get raw JPEG
+                        cap.set(cv2.CAP_PROP_CONVERT_RGB, 0)
+                    ok, test = cap.read()
+                    if ok and test is not None:
                         self._cap = cap
-                        self._capture_method = 'gstreamer'
+                        self._gst_jpeg = is_jpeg
+                        self._capture_method = (
+                            'gstreamer-jpeg' if is_jpeg else 'gstreamer'
+                        )
                         return True
                     cap.release()
         except Exception as e:
@@ -288,15 +304,23 @@ class PiCameraNode(Node):
     def _capture_loop(self) -> None:
         """Blocking capture loop — runs in its own thread.
 
-        The GStreamer ISP pipeline delivers frames at native sensor rate
-        (~30fps) regardless of settings.  We use grab() to drain the
-        pipeline cheaply and only call retrieve()+imencode() at our
-        target FPS, saving the expensive BGR copy + JPEG encode on
-        skipped frames.
+        Two modes:
+          gst_jpeg=True  → GStreamer delivers JPEG bytes directly.
+                           grab()+retrieve() returns raw JPEG buffer.
+                           No BGR conversion, no imencode. Fastest.
+          gst_jpeg=False → GStreamer delivers BGR frames.
+                           We call imencode() in Python. Slower.
+
+        In both modes we drain the pipeline with grab() to avoid
+        buffering stale frames, and only retrieve at target FPS.
         """
         cv2 = self._cv2
         min_period = 1.0 / max(self._fps, 1e-3)
         last_publish = 0.0
+        is_jpeg = self._gst_jpeg
+
+        # Pre-allocate imencode params (only used in BGR path)
+        encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), int(self._jpeg_quality)]
 
         while not self._stopped and self._cap is not None:
             # Drain the pipeline buffer (cheap — no pixel copy)
@@ -313,7 +337,7 @@ class PiCameraNode(Node):
 
             # Skip work if nobody is subscribed
             if self._pub.get_subscription_count() == 0:
-                time.sleep(0.01)
+                time.sleep(min_period)
                 continue
 
             # Only retrieve + encode + publish at target FPS
@@ -324,14 +348,11 @@ class PiCameraNode(Node):
             if not ok or frame is None:
                 continue
 
-            if self._gst_jpeg:
-                jpeg_bytes = frame.tobytes()
+            if is_jpeg:
+                # GStreamer already encoded JPEG — extract raw bytes
+                jpeg_bytes = bytes(frame.data)
             else:
-                ok, buf = cv2.imencode(
-                    '.jpg',
-                    frame,
-                    [int(cv2.IMWRITE_JPEG_QUALITY), int(self._jpeg_quality)],
-                )
+                ok, buf = cv2.imencode('.jpg', frame, encode_params)
                 if not ok:
                     continue
                 jpeg_bytes = buf.tobytes()

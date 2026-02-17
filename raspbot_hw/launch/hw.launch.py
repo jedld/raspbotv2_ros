@@ -29,6 +29,7 @@ def generate_launch_description():
     enable_slam = LaunchConfiguration('enable_slam')
     enable_lidar_obstacle = LaunchConfiguration('enable_lidar_obstacle')
     enable_calibration = LaunchConfiguration('enable_calibration')
+    enable_battery_monitor = LaunchConfiguration('enable_battery_monitor')
     camera_launch_prefix = LaunchConfiguration('camera_launch_prefix')
     params_file = LaunchConfiguration('params_file')
 
@@ -54,6 +55,7 @@ def generate_launch_description():
         DeclareLaunchArgument('enable_slam', default_value='true'),
         DeclareLaunchArgument('enable_lidar_obstacle', default_value='true'),
         DeclareLaunchArgument('enable_calibration', default_value='true'),
+        DeclareLaunchArgument('enable_battery_monitor', default_value='true'),
         DeclareLaunchArgument('camera_launch_prefix', default_value='nice -n 5'),
         DeclareLaunchArgument('params_file', default_value=default_params_file),
 
@@ -178,6 +180,15 @@ def generate_launch_description():
             output='screen',
             parameters=[params_file],
             condition=IfCondition(enable_calibration),
+        ),
+
+        Node(
+            package='raspbot_hw',
+            executable='battery_monitor',
+            name='battery_monitor',
+            output='screen',
+            parameters=[params_file],
+            condition=IfCondition(enable_battery_monitor),
         ),
 
     ])

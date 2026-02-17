@@ -111,6 +111,8 @@ class OpenCVCameraNode(Node):
         # Prefer MJPEG for lower CPU usage on USB cameras
         self._cap.set(self._cv2.CAP_PROP_FOURCC,
                       self._cv2.VideoWriter_fourcc(*'MJPG'))
+        # Minimize V4L2 kernel buffer queue to reduce latency
+        self._cap.set(self._cv2.CAP_PROP_BUFFERSIZE, 2)
 
         if not self._cap.isOpened():
             raise RuntimeError(f'Failed to open camera device index {self._device_index}')
@@ -136,9 +138,18 @@ class OpenCVCameraNode(Node):
         )
 
     def _capture_loop(self) -> None:
-        """Blocking capture loop in dedicated thread."""
+        """Blocking capture loop in dedicated thread.
+
+        When the USB camera negotiates MJPG FourCC we grab raw JPEG
+        buffers directly and skip the decode→re-encode round-trip.
+        This is the primary CPU saving for USB webcams.
+        """
         cv2 = self._cv2
         min_period = 1.0 / max(self._fps, 1e-3)
+        raw_mjpeg = self._raw_mjpeg
+
+        # Pre-allocate imencode params (only used in non-MJPEG path)
+        encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), int(self._jpeg_quality)]
 
         while not self._stopped:
             # Skip work if nobody is subscribed
@@ -149,7 +160,7 @@ class OpenCVCameraNode(Node):
 
             t0 = time.monotonic()
 
-            if self._raw_mjpeg:
+            if raw_mjpeg:
                 # Grab raw JPEG buffer — no BGR decode → no re-encode
                 ok = self._cap.grab()
                 if not ok:
@@ -159,18 +170,17 @@ class OpenCVCameraNode(Node):
                 if not ok or raw is None:
                     time.sleep(0.05)
                     continue
-                jpeg_bytes = raw.tobytes()
+                jpeg_bytes = bytes(raw.data)
             else:
                 ok, frame = self._cap.read()
                 if not ok:
-                    self.get_logger().warn('Camera frame grab failed')
+                    self.get_logger().warn(
+                        'Camera frame grab failed',
+                        throttle_duration_sec=5.0,
+                    )
                     time.sleep(0.05)
                     continue
-                ok, buf = cv2.imencode(
-                    '.jpg',
-                    frame,
-                    [int(cv2.IMWRITE_JPEG_QUALITY), int(self._jpeg_quality)],
-                )
+                ok, buf = cv2.imencode('.jpg', frame, encode_params)
                 if not ok:
                     continue
                 jpeg_bytes = buf.tobytes()
@@ -186,7 +196,6 @@ class OpenCVCameraNode(Node):
             remaining = min_period - elapsed
             if remaining > 0:
                 time.sleep(remaining)
-        self._pub.publish(msg)
 
     def destroy_node(self):
         self._stopped = True

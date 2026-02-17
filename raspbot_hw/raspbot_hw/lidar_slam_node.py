@@ -22,6 +22,8 @@ import math
 import time
 import threading
 
+import numpy as np
+
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
@@ -163,8 +165,8 @@ class LidarSlamNode(Node):
 
         self._yaw_offset = float(self.get_parameter('lidar_yaw_offset').value)
 
-        # ── Occupancy grid (flat list, log-odds) ──────────────────────
-        self._grid = [0.0] * (self._width * self._height)
+        # ── Occupancy grid (numpy array, log-odds) ──────────────────
+        self._grid = np.zeros(self._width * self._height, dtype=np.float64)
         self._lock = threading.Lock()
 
         # ── Odometry state ────────────────────────────────────────────
@@ -304,10 +306,10 @@ class LidarSlamNode(Node):
 
     def _update_grid(self, scan: LaserScan,
                      robot_x: float, robot_y: float, robot_yaw: float) -> None:
-        """Update occupancy grid with Bresenham ray-casting."""
+        """Update occupancy grid with Bresenham ray-casting (numpy-accelerated)."""
         rx, ry = self._world_to_grid(robot_x, robot_y)
-        angle = scan.angle_min
         w = self._width
+        h = self._height
         grid = self._grid
         log_occ = self._log_occ
         log_free = self._log_free
@@ -320,38 +322,40 @@ class LidarSlamNode(Node):
         ox = self._origin_x
         oy = self._origin_y
 
-        for i, r in enumerate(scan.ranges):
-            if i % ds != 0:
-                angle += scan.angle_increment
-                continue
+        # Vectorised scan point extraction + endpoint computation
+        ranges = np.asarray(scan.ranges, dtype=np.float64)
+        n = len(ranges)
+        indices = np.arange(0, n, ds)
+        r_ds = ranges[indices]
 
-            if r < min_r or r > max_r or math.isinf(r) or math.isnan(r):
-                angle += scan.angle_increment
-                continue
+        # Filter valid ranges
+        valid = np.isfinite(r_ds) & (r_ds >= min_r) & (r_ds <= max_r)
+        r_valid = r_ds[valid]
 
-            # Endpoint in map frame (apply yaw offset to correct LiDAR mounting)
-            beam_angle = robot_yaw + angle - self._yaw_offset
-            ex = robot_x + r * math.cos(beam_angle)
-            ey = robot_y + r * math.sin(beam_angle)
+        if len(r_valid) == 0:
+            return
 
-            gx = int((ex - ox) / res)
-            gy = int((ey - oy) / res)
+        # Compute beam angles and grid endpoints in batch
+        angles = scan.angle_min + indices[valid].astype(np.float64) * scan.angle_increment
+        beam_angles = robot_yaw + angles - self._yaw_offset
+        ex = robot_x + r_valid * np.cos(beam_angles)
+        ey = robot_y + r_valid * np.sin(beam_angles)
+        gx_arr = ((ex - ox) / res).astype(np.intp)
+        gy_arr = ((ey - oy) / res).astype(np.intp)
 
-            # Bresenham ray: mark free cells, then occupied endpoint
-            self._trace_ray(rx, ry, gx, gy, grid, w, log_free, log_occ,
-                            log_min, log_max)
-
-            angle += scan.angle_increment
+        # Bresenham per ray (inherently sequential, but scan extraction above is vectorised)
+        for i in range(len(r_valid)):
+            self._trace_ray(rx, ry, int(gx_arr[i]), int(gy_arr[i]),
+                            grid, w, h, log_free, log_occ, log_min, log_max)
 
     @staticmethod
-    def _trace_ray(x0, y0, x1, y1, grid, w, log_free, log_occ,
+    def _trace_ray(x0, y0, x1, y1, grid, w, h, log_free, log_occ,
                    log_min, log_max):
         """Bresenham line from (x0,y0) to (x1,y1).
 
         Marks traversed cells as free, endpoint cell as occupied.
-        Operates directly on the grid list for speed.
+        Operates directly on the numpy grid array for speed.
         """
-        h = len(grid) // w
         dx = abs(x1 - x0)
         dy = abs(y1 - y0)
         sx = 1 if x0 < x1 else -1
@@ -391,20 +395,18 @@ class LidarSlamNode(Node):
         Evaluates a grid of candidate poses around the initial estimate.
         Returns (best_x, best_y, best_yaw, best_score).
         """
-        # Pre-extract valid scan angles + ranges (downsampled)
-        angles = []
-        ranges = []
-        angle = scan.angle_min
-        for i, r in enumerate(scan.ranges):
-            if i % self._downsample == 0:
-                if self._min_range < r < self._max_range \
-                        and not math.isinf(r) and not math.isnan(r):
-                    angles.append(angle)
-                    ranges.append(r)
-            angle += scan.angle_increment
+        # Pre-extract valid scan angles + ranges (downsampled, vectorised)
+        all_ranges = np.asarray(scan.ranges, dtype=np.float64)
+        n = len(all_ranges)
+        ds_idx = np.arange(0, n, self._downsample)
+        r_ds = all_ranges[ds_idx]
+        valid = np.isfinite(r_ds) & (r_ds > self._min_range) & (r_ds < self._max_range)
+        r_valid = r_ds[valid]
 
-        if not ranges:
+        if len(r_valid) == 0:
             return init_x, init_y, init_yaw, 0.0
+
+        a_valid = scan.angle_min + ds_idx[valid].astype(np.float64) * scan.angle_increment
 
         n_xy = max(1, int(self._search_xy / self._step_xy))
         n_yaw = max(1, int(self._search_yaw / self._step_yaw))
@@ -419,6 +421,7 @@ class LidarSlamNode(Node):
         oy = self._origin_y
         res = self._resolution
 
+        # For each candidate yaw, vectorise the score over all scan points
         for dxi in range(-n_xy, n_xy + 1):
             cx = init_x + dxi * self._step_xy
             for dyi in range(-n_xy, n_xy + 1):
@@ -426,16 +429,17 @@ class LidarSlamNode(Node):
                 for dyawi in range(-n_yaw, n_yaw + 1):
                     cyaw = init_yaw + dyawi * self._step_yaw
 
-                    # Score: sum of log-odds at projected scan endpoints
-                    score = 0.0
-                    for k in range(len(ranges)):
-                        beam_a = cyaw + angles[k]
-                        ex = cx + ranges[k] * math.cos(beam_a)
-                        ey = cy + ranges[k] * math.sin(beam_a)
-                        gx = int((ex - ox) / res)
-                        gy = int((ey - oy) / res)
-                        if 0 <= gx < w and 0 <= gy < h:
-                            score += grid[gy * w + gx]
+                    # Vectorised: compute all endpoints at once
+                    beam_a = cyaw + a_valid
+                    ex = cx + r_valid * np.cos(beam_a)
+                    ey = cy + r_valid * np.sin(beam_a)
+                    gx = ((ex - ox) / res).astype(np.intp)
+                    gy = ((ey - oy) / res).astype(np.intp)
+
+                    # Mask in-bounds points and sum grid values
+                    in_bounds = (gx >= 0) & (gx < w) & (gy >= 0) & (gy < h)
+                    idx = gy[in_bounds] * w + gx[in_bounds]
+                    score = float(grid[idx].sum())
 
                     if score > best_score:
                         best_score = score
@@ -461,17 +465,15 @@ class LidarSlamNode(Node):
 
         thresh = self._unknown_thresh
         with self._lock:
-            # Convert log-odds → occupancy value  (-1 unknown, 0–100 probability)
-            data = []
-            for lo in self._grid:
-                if abs(lo) < thresh:
-                    data.append(-1)
-                else:
-                    # Probability = 1 / (1 + e^{-lo})  →  scale to 0–100
-                    p = 1.0 / (1.0 + math.exp(-lo))
-                    data.append(int(p * 100.0))
+            # Vectorised log-odds → occupancy value (-1 unknown, 0–100 probability)
+            grid = self._grid.copy()
 
-        msg.data = data
+        abs_grid = np.abs(grid)
+        prob = 1.0 / (1.0 + np.exp(-grid))
+        occ = (prob * 100.0).astype(np.int8)
+        occ[abs_grid < thresh] = -1
+
+        msg.data = occ.tolist()
         self._map_pub.publish(msg)
 
     def _publish_tf(self) -> None:
@@ -496,8 +498,7 @@ class LidarSlamNode(Node):
     def _srv_reset(self, req, resp):
         """Clear the occupancy grid and reset the correction transform."""
         with self._lock:
-            for i in range(len(self._grid)):
-                self._grid[i] = 0.0
+            self._grid[:] = 0.0
         self._corr_x = 0.0
         self._corr_y = 0.0
         self._corr_yaw = 0.0

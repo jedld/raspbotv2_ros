@@ -189,8 +189,8 @@ pi_camera:
     frame_id: "front_camera_link"
     width: 640
     height: 480
-    fps: 20.0
-    jpeg_quality: 80
+    fps: 15.0
+    jpeg_quality: 65
     topic: "front_camera/compressed"
     # Autofocus (Pi Camera Module 3 / IMX708 PDAF)
     #   af_mode:  0 = manual, 1 = auto (single-shot), 2 = continuous
@@ -249,7 +249,7 @@ lightbar:
     # Options: none, rainbow, breathing, chase
     startup_effect: "rainbow"
     startup_duration_sec: 3.0
-    effect_fps: 30.0
+    effect_fps: 12.0
 
 imu_serial:
   ros__parameters:
@@ -257,7 +257,7 @@ imu_serial:
     baud_rate: 115200
     serial_timeout_sec: 2.0
     frame_id: "imu_link"
-    publish_hz: 100.0
+    publish_hz: 40.0
     # Always auto-calibrates gyro on every serial connection/reconnection.
     # This delay lets the Arduino + USB settle before sending the calibrate command.
     startup_calibrate_delay_sec: 1.0

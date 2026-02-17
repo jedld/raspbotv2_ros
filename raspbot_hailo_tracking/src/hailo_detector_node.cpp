@@ -754,20 +754,21 @@ private:
         const int orig_w = bgr.cols;
         const int orig_h = bgr.rows;
 
-        cv::Mat resized;
-        cv::resize(bgr, resized, cv::Size(input_w_, input_h_), 0, 0, cv::INTER_LINEAR);
-        cv::Mat rgb;
-        cv::cvtColor(resized, rgb, cv::COLOR_BGR2RGB);
-        if (!rgb.isContinuous()) {
-            rgb = rgb.clone();
+        // Resize first (on smaller image), then convert colour — saves CPU
+        // because cvtColor operates on the small model-input size instead
+        // of the full camera resolution.
+        cv::resize(bgr, det_resized_, cv::Size(input_w_, input_h_), 0, 0, cv::INTER_LINEAR);
+        cv::cvtColor(det_resized_, det_rgb_, cv::COLOR_BGR2RGB);
+        if (!det_rgb_.isContinuous()) {
+            det_rgb_ = det_rgb_.clone();
         }
 
-        if (static_cast<size_t>(rgb.total() * rgb.elemSize()) < input_frame_size_) {
+        if (static_cast<size_t>(det_rgb_.total() * det_rgb_.elemSize()) < input_frame_size_) {
             RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "RGB buffer too small for input frame size");
             return;
         }
 
-        std::memcpy(input_buffer_->data(), rgb.data, input_frame_size_);
+        std::memcpy(input_buffer_->data(), det_rgb_.data, input_frame_size_);
 
         std::map<std::string, hailort::MemoryView> buffers;
         buffers.emplace(input_name_, hailort::MemoryView(*input_buffer_));
@@ -1359,6 +1360,10 @@ private:
     size_t input_frame_size_{0};
     size_t output_frame_size_{0};
 
+    // Pre-allocated cv::Mat buffers to avoid per-frame allocation
+    cv::Mat det_resized_;
+    cv::Mat det_rgb_;
+
     std::vector<std::string> labels_;
     int track_class_id_cached_{-1};
 
@@ -1436,19 +1441,18 @@ private:
         const int orig_w = bgr.cols;
         const int orig_h = bgr.rows;
 
-        cv::Mat resized;
-        cv::resize(bgr, resized, cv::Size(depth_input_w_, depth_input_h_), 0, 0, cv::INTER_LINEAR);
-        cv::Mat rgb;
-        cv::cvtColor(resized, rgb, cv::COLOR_BGR2RGB);
-        if (!rgb.isContinuous()) {
-            rgb = rgb.clone();
+        // Resize first then convert — cvtColor on the small model-input size
+        cv::resize(bgr, depth_resized_, cv::Size(depth_input_w_, depth_input_h_), 0, 0, cv::INTER_LINEAR);
+        cv::cvtColor(depth_resized_, depth_rgb_, cv::COLOR_BGR2RGB);
+        if (!depth_rgb_.isContinuous()) {
+            depth_rgb_ = depth_rgb_.clone();
         }
 
-        if (static_cast<size_t>(rgb.total() * rgb.elemSize()) < depth_input_frame_size_) {
+        if (static_cast<size_t>(depth_rgb_.total() * depth_rgb_.elemSize()) < depth_input_frame_size_) {
             return;
         }
 
-        std::memcpy(depth_input_buffer_->data(), rgb.data, depth_input_frame_size_);
+        std::memcpy(depth_input_buffer_->data(), depth_rgb_.data, depth_input_frame_size_);
 
         std::map<std::string, hailort::MemoryView> buffers;
         buffers.emplace(depth_input_name_, hailort::MemoryView(*depth_input_buffer_));
@@ -1531,6 +1535,10 @@ private:
     int depth_input_h_{0};
     size_t depth_input_frame_size_{0};
     size_t depth_output_frame_size_{0};
+
+    // Pre-allocated cv::Mat buffers for depth preprocessing
+    cv::Mat depth_resized_;
+    cv::Mat depth_rgb_;
 
     std::atomic<bool> depth_enabled_{true};
     steady_clock::time_point last_depth_infer_time_{steady_clock::duration::zero()};
