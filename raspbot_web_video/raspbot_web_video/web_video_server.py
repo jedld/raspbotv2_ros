@@ -44,6 +44,9 @@ def _build_index_html():
         "</head>\n"
         "<body>\n"
         + body + "\n"
+        '<script defer src="https://unpkg.com/react@18/umd/react.production.min.js"></script>\n'
+        '<script defer src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>\n'
+        '<script defer src="/static/layout_react.js"></script>\n'
         '<script defer src="/static/app.js"></script>\n'
         "</body>\n"
         "</html>\n"
@@ -1901,6 +1904,34 @@ def make_handler(
             return None
 
     class Handler(BaseHTTPRequestHandler):
+        # Use a large write buffer so each flush() sends one TCP segment
+        # per frame instead of 3-4 small send() syscalls that thrash the GIL.
+        wbufsize = 65536
+
+        def setup(self):
+            super().setup()
+            # Disable Nagle algorithm — send frames immediately, don't
+            # wait up to 40 ms trying to coalesce small writes.
+            try:
+                self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            except Exception:
+                pass
+
+        def handle(self):
+            # Suppress noisy BrokenPipeError tracebacks that the base class
+            # prints to stderr when a stream client disconnects.
+            try:
+                super().handle()
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
+                pass
+
+        def finish(self):
+            # Suppress errors during final wfile flush/close after stream disconnect.
+            try:
+                super().finish()
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
+                pass
+
         def log_message(self, fmt, *args):
             # Quiet default logging; use ROS logger instead.
             if logger is not None:
@@ -1918,6 +1949,7 @@ def make_handler(
                 self.send_response(HTTPStatus.OK)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-cache, must-revalidate")
                 self.end_headers()
                 self.wfile.write(body)
                 try:
@@ -1944,10 +1976,22 @@ def make_handler(
                 ct = _ct_map.get(ext, 'application/octet-stream')
                 with open(fpath, 'rb') as sf:
                     data = sf.read()
+
+                # ETag from content hash — enables 304 Not Modified
+                etag = '"' + hashlib.md5(data).hexdigest() + '"'
+                if_none = self.headers.get('If-None-Match', '')
+                if if_none == etag:
+                    self.send_response(HTTPStatus.NOT_MODIFIED)
+                    self.send_header("ETag", etag)
+                    self.send_header("Cache-Control", "public, max-age=300, must-revalidate")
+                    self.end_headers()
+                    return
+
                 self.send_response(HTTPStatus.OK)
                 self.send_header("Content-Type", ct + '; charset=utf-8')
                 self.send_header("Content-Length", str(len(data)))
-                self.send_header("Cache-Control", "no-cache")
+                self.send_header("ETag", etag)
+                self.send_header("Cache-Control", "public, max-age=300, must-revalidate")
                 self.end_headers()
                 self.wfile.write(data)
                 try:
@@ -2352,15 +2396,12 @@ def make_handler(
                 self.send_header("Pragma", "no-cache")
                 self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
                 self.end_headers()
-                try:
-                    self.wfile.flush()
-                except Exception:
-                    pass
+                self.wfile.flush()
 
                 last_stamp = 0.0
                 last_sent_time = 0.0
                 try:
-                    self.connection.settimeout(3.0)
+                    self.connection.settimeout(10.0)
                 except Exception:
                     pass
 
@@ -2368,7 +2409,7 @@ def make_handler(
                     while True:
                         # Throttle server-side to avoid pegging CPU/network.
                         now = time.monotonic()
-                        sleep_needed = (last_sent_time + depth_min_period) - now
+                        sleep_needed = (last_sent_time + min_period) - now
                         if sleep_needed > 0:
                             time.sleep(sleep_needed)
 
@@ -2379,19 +2420,16 @@ def make_handler(
                         last_stamp = frame.stamp_monotonic
                         last_sent_time = time.monotonic()
 
-                        headers = (
+                        jpeg = frame.jpeg
+                        # Single write per frame: boundary + headers + jpeg + CRLF
+                        self.wfile.write(
                             boundary + b"\r\n"
-                            b"Content-Type: image/jpeg\r\n" +
-                            f"Content-Length: {len(frame.jpeg)}\r\n\r\n".encode("ascii")
+                            b"Content-Type: image/jpeg\r\n"
+                            b"Content-Length: " + str(len(jpeg)).encode("ascii") + b"\r\n\r\n"
+                            + jpeg + b"\r\n"
                         )
-                        self.wfile.write(headers)
-                        self.wfile.write(frame.jpeg)
-                        self.wfile.write(b"\r\n")
-                        try:
-                            self.wfile.flush()
-                        except Exception:
-                            pass
-                except (BrokenPipeError, ConnectionResetError, TimeoutError):
+                        self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError, TimeoutError, OSError):
                     return
                 except Exception as e:
                     if logger is not None:
@@ -2412,15 +2450,12 @@ def make_handler(
                 self.send_header("Pragma", "no-cache")
                 self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
                 self.end_headers()
-                try:
-                    self.wfile.flush()
-                except Exception:
-                    pass
+                self.wfile.flush()
 
                 last_stamp = 0.0
                 last_sent_time = 0.0
                 try:
-                    self.connection.settimeout(3.0)
+                    self.connection.settimeout(10.0)
                 except Exception:
                     pass
 
@@ -2438,19 +2473,15 @@ def make_handler(
                         last_stamp = frame.stamp_monotonic
                         last_sent_time = time.monotonic()
 
-                        headers = (
+                        jpeg = frame.jpeg
+                        self.wfile.write(
                             boundary + b"\r\n"
-                            b"Content-Type: image/jpeg\r\n" +
-                            f"Content-Length: {len(frame.jpeg)}\r\n\r\n".encode("ascii")
+                            b"Content-Type: image/jpeg\r\n"
+                            b"Content-Length: " + str(len(jpeg)).encode("ascii") + b"\r\n\r\n"
+                            + jpeg + b"\r\n"
                         )
-                        self.wfile.write(headers)
-                        self.wfile.write(frame.jpeg)
-                        self.wfile.write(b"\r\n")
-                        try:
-                            self.wfile.flush()
-                        except Exception:
-                            pass
-                except (BrokenPipeError, ConnectionResetError, TimeoutError):
+                        self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError, TimeoutError, OSError):
                     return
                 except Exception as e:
                     if logger is not None:
@@ -2471,22 +2502,19 @@ def make_handler(
                 self.send_header("Pragma", "no-cache")
                 self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
                 self.end_headers()
-                try:
-                    self.wfile.flush()
-                except Exception:
-                    pass
+                self.wfile.flush()
 
                 last_stamp = 0.0
                 last_sent_time = 0.0
                 try:
-                    self.connection.settimeout(3.0)
+                    self.connection.settimeout(10.0)
                 except Exception:
                     pass
 
                 try:
                     while True:
                         now = time.monotonic()
-                        sleep_needed = (last_sent_time + min_period) - now
+                        sleep_needed = (last_sent_time + depth_min_period) - now
                         if sleep_needed > 0:
                             time.sleep(sleep_needed)
 
@@ -2497,19 +2525,15 @@ def make_handler(
                         last_stamp = frame.stamp_monotonic
                         last_sent_time = time.monotonic()
 
-                        headers = (
+                        jpeg = frame.jpeg
+                        self.wfile.write(
                             boundary + b"\r\n"
-                            b"Content-Type: image/jpeg\r\n" +
-                            f"Content-Length: {len(frame.jpeg)}\r\n\r\n".encode("ascii")
+                            b"Content-Type: image/jpeg\r\n"
+                            b"Content-Length: " + str(len(jpeg)).encode("ascii") + b"\r\n\r\n"
+                            + jpeg + b"\r\n"
                         )
-                        self.wfile.write(headers)
-                        self.wfile.write(frame.jpeg)
-                        self.wfile.write(b"\r\n")
-                        try:
-                            self.wfile.flush()
-                        except Exception:
-                            pass
-                except (BrokenPipeError, ConnectionResetError, TimeoutError):
+                        self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError, TimeoutError, OSError):
                     return
                 except Exception as e:
                     if logger is not None:
@@ -2553,15 +2577,12 @@ def make_handler(
                 self.send_header("Pragma", "no-cache")
                 self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
                 self.end_headers()
-                try:
-                    self.wfile.flush()
-                except Exception:
-                    pass
+                self.wfile.flush()
 
                 last_stamp = 0.0
                 last_sent_time = 0.0
                 try:
-                    self.connection.settimeout(3.0)
+                    self.connection.settimeout(10.0)
                 except Exception:
                     pass
 
@@ -2584,19 +2605,14 @@ def make_handler(
                             # Fallback: send original frame
                             resized = frame.jpeg
 
-                        headers = (
+                        self.wfile.write(
                             boundary + b"\r\n"
-                            b"Content-Type: image/jpeg\r\n" +
-                            f"Content-Length: {len(resized)}\r\n\r\n".encode("ascii")
+                            b"Content-Type: image/jpeg\r\n"
+                            b"Content-Length: " + str(len(resized)).encode("ascii") + b"\r\n\r\n"
+                            + resized + b"\r\n"
                         )
-                        self.wfile.write(headers)
-                        self.wfile.write(resized)
-                        self.wfile.write(b"\r\n")
-                        try:
-                            self.wfile.flush()
-                        except Exception:
-                            pass
-                except (BrokenPipeError, ConnectionResetError, TimeoutError):
+                        self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError, TimeoutError, OSError):
                     return
                 except Exception as e:
                     if logger is not None:
@@ -3482,24 +3498,37 @@ def main() -> None:
     class RaspbotHTTPServer(ThreadingHTTPServer):
         daemon_threads = True
 
+        def handle_error(self, request, client_address):
+            # Suppress noisy traceback for expected stream disconnections.
+            import sys
+            exc = sys.exc_info()[1]
+            if isinstance(exc, (BrokenPipeError, ConnectionResetError,
+                                ConnectionAbortedError, TimeoutError)):
+                return  # expected — client closed the stream
+            super().handle_error(request, client_address)
+
     RaspbotHTTPServer.request_queue_size = max(16, min(256, int(http_backlog)))
     httpd = RaspbotHTTPServer((bind, port), handler_cls)
-    # Allow the serve loop to wake up periodically so Ctrl-C / rclpy shutdown is responsive.
-    httpd.timeout = 0.5
 
     node.get_logger().info(
         f"Web video server on http://{bind}:{port}/ (MJPEG: /stream.mjpg, front: /stream_front.mjpg, depth: /stream_depth.mjpg, status: /status)"
     )
 
+    # Use serve_forever() in a daemon thread for efficient accept() polling,
+    # then watch rclpy.ok() in the main thread.
+    serve_thread = threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.5}, daemon=True)
+    serve_thread.start()
+
     try:
-        # Don't rely on custom signal handlers here.
-        # In ROS 2, Ctrl-C often triggers rclpy shutdown via its own handler.
-        # This loop exits when either Ctrl-C raises KeyboardInterrupt or rclpy.ok() becomes false.
         while rclpy.ok():
-            httpd.handle_request()
+            time.sleep(0.5)
     except KeyboardInterrupt:
         pass
     finally:
+        try:
+            httpd.shutdown()   # signals serve_forever() to exit
+        except Exception:
+            pass
         try:
             httpd.server_close()
         except Exception:

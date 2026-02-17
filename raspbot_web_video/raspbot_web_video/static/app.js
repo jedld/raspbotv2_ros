@@ -37,6 +37,9 @@ const pan = document.getElementById('pan');
         let frontFrameCount = -1;
         let frontFrameLastAdvanceMs = 0;
         let frontReconnectLastMs = 0;
+        let gimbalFrameCount = -1;
+        let gimbalFrameLastAdvanceMs = 0;
+        let gimbalReconnectLastMs = 0;
 
         /* Track when a user last touched each slider so the status poll
            does not overwrite the value while the user is still dragging. */
@@ -91,6 +94,14 @@ const pan = document.getElementById('pan');
                 }
             }
             statusEl.textContent = `frames=${j.frame_count ?? '?'} last_frame_age_s=${j.last_frame_age_s ?? 'null'}`;
+            // Update gimbal frame liveness from server-side frame_count
+            if (typeof j.frame_count === 'number') {
+                const fc = Number(j.frame_count);
+                if (fc > gimbalFrameCount) {
+                    gimbalFrameCount = fc;
+                    gimbalFrameLastAdvanceMs = Date.now();
+                }
+            }
             if (j.tracking) {
                 const enabled = Boolean(j.tracking.enabled);
                 trackingEnabled = enabled;
@@ -512,11 +523,11 @@ const pan = document.getElementById('pan');
                 });
             }
 
-            guardedFetch('/api/gimbal', {
+            fetch('/api/gimbal', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({pan_deg: cmd.pan, tilt_deg: cmd.tilt})
-            }, 1200).catch(() => {}).finally(() => {
+            }).catch(() => {}).finally(() => {
                 gimbalInFlight = false;
                 if (gimbalPending) flushGimbalSendQueue();
             });
@@ -1135,6 +1146,25 @@ const pan = document.getElementById('pan');
 
         // fetchFast polling replaced by WebSocket
 
+        // ── Gimbal (main) camera auto-reconnect ──────────────────
+        // The <img> 'load' event fires only once for MJPEG in Chromium,
+        // so we rely on server-side frame_count via WebSocket status push
+        // (updated in updateStatusUI) for liveness.  If the server reports
+        // frames but the <img> appears stuck, cycle the src to reconnect.
+        video.addEventListener('load', () => {
+            gimbalFrameLastAdvanceMs = Date.now();
+        });
+        video.addEventListener('error', () => {
+            // Immediate reconnect on network error
+            const now = Date.now();
+            if ((now - gimbalReconnectLastMs) > 2000) {
+                gimbalReconnectLastMs = now;
+                const base = (video.src || '/stream.mjpg').split('?')[0];
+                video.src = '';
+                setTimeout(() => { video.src = `${base}?t=${Date.now()}`; }, 100);
+            }
+        });
+
         // Front camera status
         const frontCamStatus = document.getElementById('frontCamStatus');
         const frontVideo = document.getElementById('frontVideo');
@@ -1147,22 +1177,23 @@ const pan = document.getElementById('pan');
             frontFrameLastAdvanceMs = Date.now();
             frontCamStatus.textContent = 'streaming';
         });
-        frontVideo.addEventListener('error', () => { frontCamOk = false; frontCamStatus.textContent = 'no stream'; });
+        frontVideo.addEventListener('error', () => {
+            frontCamOk = false;
+            frontCamStatus.textContent = 'no stream';
+            // Immediate reconnect on network error
+            const now = Date.now();
+            if ((now - frontReconnectLastMs) > 2000) {
+                frontReconnectLastMs = now;
+                const base = (frontVideo.src || '/stream_front.mjpg').split('?')[0];
+                frontVideo.src = '';
+                setTimeout(() => { frontVideo.src = `${base}?t=${Date.now()}`; }, 100);
+            }
+        });
         setInterval(() => {
             const now = Date.now();
-            const stalled = frontFrameLastAdvanceMs > 0 && (now - frontFrameLastAdvanceMs) > 3000;
+            const stalled = frontFrameLastAdvanceMs > 0 && (now - frontFrameLastAdvanceMs) > 12000;
             if (stalled) {
                 frontCamOk = false;
-                // Force MJPEG reconnect at most once every 2s.
-                if ((now - frontReconnectLastMs) > 2000) {
-                    frontReconnectLastMs = now;
-                    const oldSrc = frontVideo.src || '/stream_front.mjpg';
-                    const base = oldSrc.split('?')[0];
-                    frontVideo.src = '';
-                    setTimeout(() => {
-                        frontVideo.src = `${base}?t=${Date.now()}`;
-                    }, 50);
-                }
             }
             if (frontCamOk) {
                 frontCamStatus.textContent = 'streaming';
@@ -2554,11 +2585,23 @@ const pan = document.getElementById('pan');
         const depthVideo = document.getElementById('depthVideo');
         let depthEnabled = true;
         let depthStreamOk = false;
+        let depthReconnectLastMs = 0;
 
         // Some browsers don't reliably emit load/error for MJPEG updates.
         // Detect stream presence by checking the image element's rendered size.
-        depthVideo.addEventListener('load', () => { /* keep for compatibility */ });
-        depthVideo.addEventListener('error', () => { /* keep for compatibility */ });
+        depthVideo.addEventListener('load', () => {
+            depthStreamOk = true;
+        });
+        depthVideo.addEventListener('error', () => {
+            // Reconnect on error
+            const now = Date.now();
+            if (depthEnabled && (now - depthReconnectLastMs) > 2000) {
+                depthReconnectLastMs = now;
+                const base = (depthVideo.src || '/stream_depth.mjpg').split('?')[0];
+                depthVideo.src = '';
+                setTimeout(() => { depthVideo.src = `${base}?t=${Date.now()}`; }, 100);
+            }
+        });
         setInterval(() => {
             // consider the stream OK if the image has loaded at least one frame
             depthStreamOk = (depthVideo.complete && depthVideo.naturalWidth && depthVideo.naturalWidth > 0);
@@ -2688,8 +2731,13 @@ const pan = document.getElementById('pan');
         // Auto-load on page open; subsequent updates via WebSocket
         loadFaces();
 
+        let _lastFacesJson = '';
         function renderFaces(facesData) {
             const faces = facesData.faces || [];
+            // Skip redundant DOM rebuild when face data hasn't changed
+            const sig = JSON.stringify(faces.map(f => [f.face_id, f.name, f.num_embeddings]));
+            if (sig === _lastFacesJson) return;
+            _lastFacesJson = sig;
             faceCountEl.textContent = String(faces.length);
             faceListEl.innerHTML = '';
             faceMergePanel.style.display = faces.length >= 2 ? '' : 'none';
