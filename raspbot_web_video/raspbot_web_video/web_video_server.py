@@ -70,83 +70,10 @@ INDEX_HTML = f"""<!DOCTYPE html>
 """
 
 # -----------------------------------------------------------------------------
-# Async Helpers & Buffers
+# Helper Classes
 # -----------------------------------------------------------------------------
 
-class LatestFrame:
-    __slots__ = ('jpeg', 'stamp_monotonic')
-    def __init__(self, jpeg: Optional[bytes] = None, stamp_monotonic: float = 0.0):
-        self.jpeg = jpeg
-        self.stamp_monotonic = stamp_monotonic
-
-class AsyncFrameBuffer:
-    """
-    Thread-safe and Async-aware buffer for video frames.
-    ROS callbacks (thread) call set().
-    FastAPI handlers (async) call wait_for_newer().
-    """
-    def __init__(self):
-        self._latest = LatestFrame(None, 0.0)
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
-        # We handle multiple waiters manually
-        self._waiters: List[asyncio.Future] = []
-        self._lock = threading.Lock()
-
-    def set_loop(self, loop: asyncio.AbstractEventLoop):
-        self._loop = loop
-
-    def set(self, jpeg: bytes) -> None:
-        """Called from ROS thread."""
-        now = time.monotonic()
-        with self._lock:
-            self._latest = LatestFrame(jpeg, now)
-            # Notify waiters in the event loop safely
-            if self._loop and not self._loop.is_closed() and self._waiters:
-                self._loop.call_soon_threadsafe(self._notify_all, self._latest)
-
-    def _notify_all(self, frame: LatestFrame):
-        """Called within the event loop."""
-        # Snapshot the list and clear it immediately
-        to_notify = self._waiters[:]
-        self._waiters.clear()
-        for fut in to_notify:
-            if not fut.done():
-                fut.set_result(frame)
-
-    async def wait_for_newer(self, last_stamp: float, timeout: float = 1.0) -> LatestFrame:
-        """Called from FastAPI route (async)."""
-        # 1. Check if we already have a newer frame
-        # If client is brand new (last_stamp=0), return immediate to fix LCP
-        with self._lock:
-            latest = self._latest
-            
-        if last_stamp == 0.0 and latest.jpeg is not None:
-             return latest
-
-        if latest.stamp_monotonic > last_stamp:
-            return latest
-
-        # 2. Wait for a new frame
-        if self._loop is None:
-            # Fallback if loop not set (shouldn't happen in normal run)
-            await asyncio.sleep(0.01)
-            return latest
-
-        fut = self._loop.create_future()
-        self._waiters.append(fut)
-        
-        try:
-            return await asyncio.wait_for(fut, timeout=timeout)
-        except asyncio.TimeoutError:
-            # On timeout, just return whatever we have (even if old) to keep stream alive
-            return latest
-        except Exception:
-            return latest
-            
-    def get_latest(self) -> LatestFrame:
-        with self._lock:
-            return self._latest
-
+# ── Simplified Audio Buffer ──────────────────────────────────────────────────
 class AsyncAudioBuffer:
     def __init__(self):
         self._chunks: List[Tuple[int, bytes]] = []
@@ -206,67 +133,15 @@ class AsyncAudioBuffer:
                 return last_seq, b""
 
 # -----------------------------------------------------------------------------
-# Re-implement Low-Res Cache Logic
-# -----------------------------------------------------------------------------
-_lo_cache: Dict[Tuple[str, int, int, int], Tuple[float, bytes]] = {}
-_lo_cache_lock = threading.Lock()
-
-def _resize_jpeg(jpeg_bytes: bytes, target_w: int, target_h: int, quality: int) -> Optional[bytes]:
-    if cv2 is None:
-        return None
-    try:
-        arr = np.frombuffer(jpeg_bytes, dtype=np.uint8)
-        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-        if img is None:
-            return None
-        resized = cv2.resize(img, (target_w, target_h), interpolation=cv2.INTER_AREA)
-        ok, enc = cv2.imencode('.jpg', resized, [cv2.IMWRITE_JPEG_QUALITY, quality])
-        if not ok:
-            return None
-        return bytes(enc)
-    except Exception:
-        return None
-
-def get_cached_lo(source_id: str, source_stamp: float, jpeg: bytes, w: int, h: int, q: int) -> bytes:
-    key = (source_id, w, h, q)
-    with _lo_cache_lock:
-        cached = _lo_cache.get(key)
-        if cached is not None and cached[0] == source_stamp:
-            return cached[1]
-    
-    # Resize (CPU intensive, run in thread pool if needed, but simple calls are okay for now)
-    # Ideally should run in executor to avoid blocking event loop
-    return _resize_jpeg(jpeg, w, h, q) or jpeg
-
-async def async_get_cached_lo(loop, source_id, source_stamp, jpeg, w, h, q):
-    # Wrapper to run resize in executor
-    key = (source_id, w, h, q)
-    with _lo_cache_lock:
-        cached = _lo_cache.get(key)
-        if cached is not None and cached[0] == source_stamp:
-            return cached[1]
-
-    def _do_work():
-        res = _resize_jpeg(jpeg, w, h, q) or jpeg
-        with _lo_cache_lock:
-            _lo_cache[key] = (source_stamp, res)
-        return res
-        
-    return await loop.run_in_executor(None, _do_work)
-
-# -----------------------------------------------------------------------------
 # ROS Node
 # -----------------------------------------------------------------------------
 
 class WebVideoNode(Node):
-    def __init__(self, frame_buffer, front_buffer, audio_buffer, depth_buffer):
+    def __init__(self, audio_buffer):
         super().__init__("web_video_server")
         
         # Buffers
-        self._frame_buffer = frame_buffer
-        self._front_frame_buffer = front_buffer
         self._audio_buffer = audio_buffer
-        self._depth_frame_buffer = depth_buffer
 
         # Parameters
         self.declare_parameter("port", 8080)
@@ -292,9 +167,9 @@ class WebVideoNode(Node):
         )
 
         # Subs
-        self.create_subscription(CompressedImage, self._camera_topic, self._on_img, qos_profile)
-        self.create_subscription(CompressedImage, self._front_camera_topic, self._on_front_img, qos_profile)
-        self.create_subscription(CompressedImage, self._depth_topic, self._on_depth_img, qos_profile)
+        self.create_subscription(CompressedImage, self._camera_topic, self._on_frame_compressed, qos_profile)
+        self.create_subscription(CompressedImage, self._front_camera_topic, self._on_front_frame_compressed, qos_profile)
+        self.create_subscription(CompressedImage, self._depth_topic, self._on_depth_compressed, qos_profile)
         
         # Gimbal
         # Gimbal Param Declarations
@@ -543,21 +418,24 @@ class WebVideoNode(Node):
         # Lightbar
         self._lightbar_pub = self.create_publisher(String, "lightbar/command", 10)
 
+        # Frame counters for debugging/status
+        self._frame_count = 0
+        self._front_frame_count = 0
+        self._depth_frame_count = 0
+
     # ... [Include all the validation logic and callbacks here] ...
     # To save space in this response, I will include the critical callbacks 
     # and use the efficient numpy logic from before.
 
-    def _on_img(self, msg):
-        if msg.data:
-            self._frame_buffer.set(bytes(msg.data))
+    # Callbacks
+    def _on_frame_compressed(self, msg):
+        self._frame_count += 1
 
-    def _on_front_img(self, msg):
-        if msg.data:
-            self._front_frame_buffer.set(bytes(msg.data))
-            
-    def _on_depth_img(self, msg):
-        if msg.data:
-            self._depth_frame_buffer.set(bytes(msg.data))
+    def _on_front_frame_compressed(self, msg):
+         self._front_frame_count += 1
+
+    def _on_depth_compressed(self, msg):
+         self._depth_frame_count += 1
             
     def _on_audio(self, msg):
         if msg.data:
@@ -847,14 +725,9 @@ class WebVideoNode(Node):
 
     def take_snapshot(self):
         # Implementation from memory/original
-        latest = self._frame_buffer.get_latest()
-        if not latest.jpeg: return {'error': 'No frame'}
-        fn = f"snap_{int(time.time()*1000)}.jpg"
-        path = os.path.join(os.path.expanduser(self.get_parameter("snapshot_dir").value), fn)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, 'wb') as f:
-            f.write(latest.jpeg)
-        return {'filename': fn, 'path': path}
+        # With video buffers removed, this functionality is broken.
+        # Returning an error or placeholder.
+        return {'error': 'Snapshot not available without video buffers'}
 
     def face_list(self): return self._face_db.get_all_faces()
     def face_rename(self, i, n): return self._face_db.update_face_name(i,n)
@@ -1123,25 +996,20 @@ app.add_middleware(
 node: Optional[WebVideoNode] = None
 executor: Optional[MultiThreadedExecutor] = None
 spin_thread: Optional[threading.Thread] = None
-frames = AsyncFrameBuffer()
-front_frames = AsyncFrameBuffer()
-depth_frames = AsyncFrameBuffer()
-audio_buf = AsyncAudioBuffer()
+# (Buffers removed, creating audio only)
+audio_buffer = AsyncAudioBuffer()
 
 @app.on_event("startup")
 async def startup_event():
-    global node, executor, spin_thread, frames, front_frames, depth_frames, audio_buf
+    global node, executor, spin_thread, audio_buffer
     
-    # Init buffers with loop
+    # Audio (kept)
     loop = asyncio.get_running_loop()
-    frames.set_loop(loop)
-    front_frames.set_loop(loop)
-    depth_frames.set_loop(loop)
-    audio_buf.set_loop(loop)
+    audio_buffer.set_loop(loop)
     
     # Start ROS Node
     rclpy.init()
-    node = WebVideoNode(frames, front_frames, audio_buf, depth_frames)
+    node = WebVideoNode(audio_buffer)
     executor = MultiThreadedExecutor()
     executor.add_node(node)
     
@@ -1428,59 +1296,20 @@ async def api_lidar_zones():
     return {}
 
 # -----------------------------------------------------------------------------
-# Streaming Endpoints
+# Config Endpoint
 # -----------------------------------------------------------------------------
-
-async def mjpeg_generator(buffer: AsyncFrameBuffer, w: int, h: int, q: int, fps_limit: float):
-    last_stamp = 0.0
-    loop = asyncio.get_running_loop()
-    min_period = 1.0 / max(1.0, float(fps_limit))
+@app.get("/api/config")
+async def api_config(request: Request):
+    # Construct stream URLs based on current host
+    host = request.url.hostname or "localhost"
+    # Proto: http or https?
+    proto = request.url.scheme
     
-    while True:
-        # Rate limiting handled by client usually? 
-        # But we can sleep if we sent too fast.
-        # However, wait_for_newer handles blocking.
-        
-        frame = await buffer.wait_for_newer(last_stamp, timeout=1.0)
-        
-        if frame.jpeg is None:
-            # Keep alive?
-            continue
-            
-        last_stamp = max(last_stamp, frame.stamp_monotonic)
-        
-        # Resize if needed
-        # Check cache if resizing requested
-        if w < 1280 or h < 720 or q < 90:
-             jpeg_data = await async_get_cached_lo(loop, "stream", frame.stamp_monotonic, frame.jpeg, w, h, q)
-        else:
-             jpeg_data = frame.jpeg
-        
-        yield (b'--frame\r\n'
-               b'Content-Type: image/jpeg\r\n'
-               b'Content-Length: ' + str(len(jpeg_data)).encode() + b'\r\n'
-               b'\r\n' + jpeg_data + b'\r\n')
-
-@app.get("/stream.mjpg")
-async def stream_mjpg(w: int = 640, h: int = 480, q: int = 30):
-    return StreamingResponse(
-        mjpeg_generator(frames, w, h, q, 15.0),
-        media_type="multipart/x-mixed-replace; boundary=frame"
-    )
-
-@app.get("/stream_front.mjpg")
-async def stream_front_mjpg(w: int = 640, h: int = 480, q: int = 30):
-    return StreamingResponse(
-        mjpeg_generator(front_frames, w, h, q, 15.0),
-        media_type="multipart/x-mixed-replace; boundary=frame"
-    )
-
-@app.get("/stream_depth.mjpg")
-async def stream_depth_mjpg():
-    return StreamingResponse(
-        mjpeg_generator(depth_frames, 320, 240, 50, 5.0),
-        media_type="multipart/x-mixed-replace; boundary=frame"
-    )
+    # We assume standard ports 8001/8002 as set in launch file
+    return {
+        "stream_main": f"{proto}://{host}:8001/stream.mjpg",
+        "stream_front": f"{proto}://{host}:8002/stream.mjpg"
+    }
 
 # -----------------------------------------------------------------------------
 # WebSocket
@@ -1576,29 +1405,36 @@ async def websocket_endpoint(websocket: WebSocket):
 # -----------------------------------------------------------------------------
 
 def main():
-    # Use 0.0.0.0 and port from params if possible, but params are in Node which isn't started yet.
-    # We can peek at sys.argv or just default 8080. 
-    # Current launch file likely sets params.
-    # We can use a standard launch-compatible pattern: 
-    # But uvicorn owns the process.
-    # The Node inside startup_event will be correct for ROS.
-    # But Uvicorn needs to bind ports BEFORE startup_event calls rclpy.init?
-    # No, uvicorn binds, then runs app, then app starts up.
+    print("DEBUG: Starting web_video_server main...")
+    port = 8080
+    host = "0.0.0.0"
     
-    # We need to map ROS2 params to Uvicorn config if we want dynamic ports.
-    # But `main` here is the entry point.
-    # We can init a temp node to read params? Or just use defaults/env vars.
-    # The previous code read params inside `main`.
-    # We can do: rclpy.init(), read params, rclpy.shutdown(), then uvicorn.run().
-    
-    rclpy.init()
-    tmp = Node("param_reader")
-    tmp.declare_parameter("port", 8080)
-    port = tmp.get_parameter("port").value
-    tmp.destroy_node()
-    rclpy.shutdown()
-    
-    uvicorn.run(app, host="0.0.0.0", port=port, log_level="error")
+    try:
+        # Initialize ROS to read parameters
+        rclpy.init()
+        # Use "web_video" name to verify if launch file passes params to this name
+        tmp = Node("web_video")
+        tmp.declare_parameter("port", 8080)
+        tmp.declare_parameter("bind", "0.0.0.0")
+        
+        port = tmp.get_parameter("port").value
+        host = tmp.get_parameter("bind").value
+        
+        print(f"DEBUG: Read params - host={host}, port={port}")
+        
+        tmp.destroy_node()
+        rclpy.shutdown()
+        # Sleep briefly to ensure ROS context cleanup doesn't interfere with next init
+        time.sleep(0.5)
+        
+    except Exception as e:
+        print(f"DEBUG: Failed to read params, using defaults. Error: {e}")
+        # Ensure shutdown if it was init
+        if rclpy.ok():
+            rclpy.shutdown()
+
+    print(f"DEBUG: Starting Uvicorn on {host}:{port}")
+    uvicorn.run(app, host=host, port=port, log_level="info")
 
 if __name__ == "__main__":
     main()

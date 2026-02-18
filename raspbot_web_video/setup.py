@@ -21,7 +21,8 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'web_video = raspbot_web_video.web_video_server:main',
+            'web_video_server = raspbot_web_video.web_video_server:main',
+            'mjpeg_streamer = raspbot_web_video.mjpeg_streamer:main',
             'face_recognition = raspbot_web_video.face_recognition_node:main',
         ],
     },

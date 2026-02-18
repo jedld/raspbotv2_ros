@@ -51,6 +51,34 @@ function userRecentlyTouched(el) {
     return t && (Date.now() - t) < USER_INPUT_GRACE_MS;
 }
 
+// ── Stream Config ──────────────────────────────────────────────────────────
+let STREAM_MAIN_URL = '';
+let STREAM_FRONT_URL = '';
+
+async function fetchConfig() {
+    try {
+        const res = await fetch('/api/config');
+        if (res.ok) {
+            const cfg = await res.json();
+            STREAM_MAIN_URL = cfg.stream_main;
+            STREAM_FRONT_URL = cfg.stream_front;
+            console.log("Stream Config Loaded:", cfg);
+
+            // Now start the stream
+            if (!video.src || video.src === window.location.href) {
+                video.src = STREAM_MAIN_URL;
+            }
+        }
+    } catch (e) {
+        console.error("Config Fetch Error:", e);
+    }
+}
+// Clear src initially to stop 404s
+document.addEventListener('DOMContentLoaded', () => {
+    if (video) video.src = '';
+});
+fetchConfig();
+
 // ── Fetch utilities: AbortController timeout + in-flight guard ─
 function guardedFetch(url, opts = {}, timeoutMs = 3000) {
     const ac = new AbortController();
@@ -1190,7 +1218,8 @@ video.addEventListener('load', () => {
 });
 video.addEventListener('click', () => {
     // Manual reconnect on click - force low res/quality
-    const base = (video.src || '/stream.mjpg').split('?')[0];
+    // Manual reconnect on click - force low res/quality
+    const base = STREAM_MAIN_URL;
     video.src = '';
     // Use conservative defaults: 320x240, Q=30
     setTimeout(() => { video.src = `${base}?w=320&h=240&q=30&t=${Date.now()}`; }, 100);
@@ -1200,8 +1229,9 @@ video.addEventListener('error', () => {
     // Immediate reconnect on network error
     const now = Date.now();
     if ((now - gimbalReconnectLastMs) > 2000) {
+        if (!STREAM_MAIN_URL) return; // Wait for config
         gimbalReconnectLastMs = now;
-        const base = (video.src || '/stream.mjpg').split('?')[0];
+        const base = STREAM_MAIN_URL;
         video.src = '';
         setTimeout(() => { video.src = `${base}?t=${Date.now()}`; }, 100);
     }
@@ -1228,8 +1258,7 @@ frontToggleBtn.addEventListener('click', () => {
         frontCamStatus.style.color = '#888';
     } else {
         frontEnabled = true;
-        const src = frontVideo.getAttribute('data-src');
-        if (src) frontVideo.src = src;
+        frontVideo.src = `${STREAM_FRONT_URL}?t=${Date.now()}`;
         frontToggleBtn.textContent = 'Disable Front';
         frontToggleBtn.classList.remove('primary');
         frontToggleBtn.classList.add('danger');

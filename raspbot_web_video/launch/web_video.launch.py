@@ -57,7 +57,7 @@ def generate_launch_description():
 
         Node(
             package='raspbot_web_video',
-            executable='web_video',
+            executable='web_video_server',
             name='web_video',
             output='screen',
             prefix=launch_prefix,
@@ -85,5 +85,27 @@ def generate_launch_description():
                 'tracking_config_topic': tracking_config_topic,
                 'follow_enable_topic': follow_enable_topic,
             }],
+        ),
+        Node(
+            package='raspbot_web_video',
+            executable='mjpeg_streamer',
+            name='stream_main',
+            output='screen',
+            parameters=[{
+                'topic': topic,
+                'port': 8001,
+                'framerate': fps_limit
+            }]
+        ),
+        Node(
+            package='raspbot_web_video',
+            executable='mjpeg_streamer',
+            name='stream_front',
+            output='screen',
+            parameters=[{
+                'topic': front_camera_topic,
+                'port': 8002,
+                'framerate': fps_limit
+            }]
         ),
     ])
