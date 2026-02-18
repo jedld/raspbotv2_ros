@@ -2866,14 +2866,14 @@ function connectWebSocket() {
     _ws.onmessage = (ev) => {
         try {
             const msg = JSON.parse(ev.data);
-            if (msg.detections) updateDetectionsUI(msg.detections);
+            if (msg.detections) updateDetectionsUI(msg);
             if (msg.imu) updateImuUI(msg.imu);
             if (msg.odom) updateOdomUI(msg.odom);
             if (msg.lidar) updateLidarUI(msg.lidar);
             if (msg.lidar_zones) updateLidarZonesUI(msg.lidar_zones);
             if (msg.status) updateStatusUI(msg.status);
             if (msg.map) updateMapUI(msg.map);
-            if (msg.faces) renderFaces(msg.faces);
+            if (msg.faces) renderFaces(msg);
         } catch (e) {
             console.warn('[ws] parse error', e);
         }

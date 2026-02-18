@@ -171,13 +171,13 @@ gpio_sensors:
 
 opencv_camera:
   ros__parameters:
-    device_index: -1   # -1 = auto-detect USB webcam
+    device_index: 8     # Fixed to /dev/video8 (USB Camera)
     frame_id: "camera_link"
     width: 640
     height: 480
     fps: 15.0
     jpeg_quality: 70
-    topic: "image_raw/compressed"
+    topic: "camera/image_raw/compressed"
 
 pi_camera:
   ros__parameters:

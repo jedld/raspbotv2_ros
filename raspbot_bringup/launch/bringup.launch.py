@@ -142,7 +142,7 @@ def generate_launch_description():
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(web_video_launch),
             launch_arguments={
-                'topic': 'image_raw/compressed',
+                'topic': 'camera/image_raw/compressed',
                 'detections_topic': 'detections/json',
                 'tracking_enable_topic': 'tracking/enable',
                 'tracking_config_topic': tracking_config_topic,
@@ -157,7 +157,7 @@ def generate_launch_description():
             launch_arguments={
                 'hef_path': hailo_hef_path,
                 'labels_path': hailo_labels_path,
-                'input_topic': 'image_raw/compressed',
+                'input_topic': 'camera/image_raw/compressed',
                 'detections_topic': 'detections/json',
                 'tracking_enable_topic': 'tracking/enable',
                 'tracking_config_topic': tracking_config_topic,

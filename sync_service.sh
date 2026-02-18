@@ -94,7 +94,23 @@ else
     info "Service unit file is already in sync."
 fi
 
-# ── 3. Restart the service ──────────────────────────────────────────
+# ── 3. Kill stale manual processes that might hold port 8080 ─────────
+_kill_stale() {
+    local pname="$1"
+    # Find processes matching the name that are attached to a terminal (pts/*),
+    # which means they were started manually, not by systemd.
+    local pids
+    pids=$(pgrep -f "$pname" -t pts 2>/dev/null || true)
+    if [ -n "$pids" ]; then
+        warn "Killing stale $pname processes (terminal): $pids"
+        echo "$pids" | xargs kill 2>/dev/null || true
+        sleep 1
+    fi
+}
+_kill_stale "web_video_server"
+_kill_stale "face_recognition"
+
+# ── 4. Restart the service ──────────────────────────────────────────
 info "Restarting raspbot.service …"
 if sudo systemctl restart raspbot.service; then
     sleep 2
